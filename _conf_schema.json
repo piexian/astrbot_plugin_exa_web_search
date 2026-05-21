@@ -1,0 +1,95 @@
+{
+  "exa_api_keys": {
+    "type": "list",
+    "description": "Exa API Key 列表",
+    "hint": "支持多个 Key 进行轮询，前往 https://dashboard.exa.ai/api-keys 获取",
+    "default": []
+  },
+  "exa_base_url": {
+    "type": "string",
+    "description": "Exa API Base URL",
+    "hint": "默认为官方，可改为代理地址",
+    "default": "https://api.exa.ai"
+  },
+  "timeout_seconds": {
+    "type": "int",
+    "description": "请求超时时间（秒）",
+    "hint": "控制每次 API 请求的最大等待时间，最小 30 秒",
+    "default": 30,
+    "slider": {
+      "min": 30,
+      "max": 120,
+      "step": 5
+    }
+  },
+  "max_results": {
+    "type": "int",
+    "description": "搜索返回最大条数",
+    "hint": "控制搜索结果的最大返回数量（1-100）",
+    "default": 10,
+    "slider": {
+      "min": 1,
+      "max": 100,
+      "step": 1
+    }
+  },
+  "default_search_type": {
+    "type": "string",
+    "description": "默认搜索类型",
+    "options": [
+      "auto",
+      "neural",
+      "fast",
+      "deep-lite",
+      "deep",
+      "deep-reasoning",
+      "instant"
+    ],
+    "default": "auto"
+  },
+  "show_sources": {
+    "type": "bool",
+    "description": "是否在结果中显示来源 URL",
+    "hint": "启用后将在搜索结果中显示来源链接",
+    "default": true
+  },
+  "max_sources": {
+    "type": "int",
+    "description": "最大显示来源数量",
+    "hint": "控制返回的来源链接数量，0 表示不限制",
+    "default": 5,
+    "slider": {
+      "min": 0,
+      "max": 20,
+      "step": 1
+    }
+  },
+  "max_retries": {
+    "type": "int",
+    "description": "最大重试次数",
+    "hint": "请求失败时的最大重试次数",
+    "default": 3,
+    "slider": {
+      "min": 0,
+      "max": 10,
+      "step": 1
+    }
+  },
+  "retry_delay": {
+    "type": "float",
+    "description": "重试间隔时间（秒）",
+    "hint": "基础重试间隔，使用指数退避，429 时优先使用 Retry-After 头",
+    "default": 1.0,
+    "slider": {
+      "min": 0.5,
+      "max": 10,
+      "step": 0.5
+    }
+  },
+  "proxy": {
+    "type": "string",
+    "description": "HTTP 代理地址",
+    "hint": "例如: http://127.0.0.1:7890，留空则不使用代理",
+    "default": ""
+  }
+}
