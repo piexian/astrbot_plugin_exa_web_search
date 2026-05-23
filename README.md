@@ -83,13 +83,13 @@ LLM Tool `web_search_exa` 支持以下分类：
 astrbot_plugin_exa_web_search/
 ├── .github/workflows/ci.yml   # CI：ruff lint/format + 语法检查 + 元数据校验
 ├── skills/                     # LLM 搜索技能指引（自动加载）
-│   ├── company_research.md     # 企业调研
-│   ├── lead_generation.md      # 线索生成
-│   ├── code_search.md          # 代码搜索
-│   ├── people_search.md        # 人物搜索
-│   ├── financial_report_search.md  # 财务报告搜索
-│   ├── research_paper_search.md    # 学术论文搜索
-│   └── personal_site_search.md     # 个人站点搜索
+│   ├── company-research/SKILL.md       # 企业调研
+│   ├── lead-generation/SKILL.md        # 线索生成
+│   ├── code-search/SKILL.md            # 代码搜索
+│   ├── people-search/SKILL.md          # 人物搜索
+│   ├── financial-report-search/SKILL.md # 财务报告搜索
+│   ├── research-paper-search/SKILL.md  # 学术论文搜索
+│   └── personal-site-search/SKILL.md   # 个人站点搜索
 ├── tools/                      # Class-based LLM 工具定义
 │   ├── __init__.py
 │   └── exa_tools.py            # web_search_exa, exa_extract_web_page, exa_find_similar
