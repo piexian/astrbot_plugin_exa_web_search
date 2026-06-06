@@ -77,6 +77,16 @@ LLM Tool `web_search_exa` 支持以下分类：
 
 `company` / `people` / `research paper` / `news` / `personal site` / `financial report`
 
+## EXA额度
+
+免费给的10刀额度不够用怎么办，前往[账单界面](https://dashboard.exa.ai/billing)右下角输入兑换
+<img width="3430" height="1893" alt="image" src="https://github.com/user-attachments/assets/f4cd7d46-c0e8-4506-b19f-0c17de895f0c" />
+
+50赠金
+```
+EXA50BUILDCLUB
+```
+
 ## 项目结构
 
 ```
