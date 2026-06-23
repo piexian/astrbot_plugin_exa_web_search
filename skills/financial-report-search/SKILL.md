@@ -8,7 +8,7 @@ description: 使用 Exa 搜索财务报告。查找 SEC 文件、财报、年报
 ## 可用工具
 
 - `web_search_exa` — 语义搜索财务报告（使用 `category="financial report"`）
-- `exa_extract_web_page` — 提取报告/文件的完整内容
+- `web_fetch_exa` — 提取报告/文件的完整内容
 
 ## 适用场景
 
@@ -32,13 +32,13 @@ web_search_exa(query="Q4 2025 earnings report technology", category="financial r
 
 ### 特定类型文件
 ```
-web_search_exa(query="10-K annual report AI companies", category="financial report", search_type="deep", max_results=15)
+web_search_exa(query="10-K annual report AI companies", category="financial report", max_results=15)
 ```
 
 ### 深入阅读报告
-搜索到目标后，用 `exa_extract_web_page` 获取完整内容：
+搜索到目标后，用 `web_fetch_exa` 获取完整内容：
 ```
-exa_extract_web_page(url="https://sec.gov/example-filing")
+web_fetch_exa(url="https://sec.gov/example-filing")
 ```
 
 ## 输出格式

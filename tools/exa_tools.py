@@ -26,8 +26,8 @@ class ExaWebSearchTool(FunctionTool):
                 "search_type": {
                     "type": "string",
                     "description": (
-                        "Optional. auto/neural/fast/deep-lite/deep/deep-reasoning/instant."
-                        " Default is auto."
+                        "Optional. auto/keyword/neural. Default is auto. "
+                        "Use auto unless the user explicitly requests keyword matching."
                     ),
                 },
                 "category": {
@@ -50,7 +50,12 @@ class ExaWebSearchTool(FunctionTool):
         search_type: str = "",
         category: str = "",
     ) -> str:
-        from ..main import PLUGIN_NAME, ExaAPIError, _normalize_count
+        from ..main import (
+            PLUGIN_NAME,
+            ExaAPIError,
+            _normalize_count,
+            _normalize_search_type,
+        )
 
         plugin = self.plugin
         if plugin is None:
@@ -70,7 +75,7 @@ class ExaWebSearchTool(FunctionTool):
             results = await plugin._exa_search(
                 query,
                 num_results=num,
-                search_type=str(search_type).strip().lower(),
+                search_type=_normalize_search_type(search_type),
                 category=str(category).strip(),
             )
             return json.dumps(results, ensure_ascii=False)
@@ -85,10 +90,10 @@ class ExaWebSearchTool(FunctionTool):
 
 
 @dataclass
-class ExaExtractWebPageTool(FunctionTool):
+class ExaWebFetchTool(FunctionTool):
     plugin: Any = None
-    name: str = "exa_extract_web_page"
-    description: str = "Extract the full text content of a web page using Exa."
+    name: str = "web_fetch_exa"
+    description: str = "Fetch the full text content of a web page using Exa."
     parameters: dict = field(
         default_factory=lambda: {
             "type": "object",
@@ -132,7 +137,7 @@ class ExaExtractWebPageTool(FunctionTool):
         except Exception as e:
             from astrbot.api import logger
 
-            logger.error(f"[{PLUGIN_NAME}] exa_extract_web_page exception: {e}")
+            logger.error(f"[{PLUGIN_NAME}] web_fetch_exa exception: {e}")
             return f"Error: Exa content extraction exception: {e}"
 
 

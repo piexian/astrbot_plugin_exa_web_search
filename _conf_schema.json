@@ -38,12 +38,8 @@
     "description": "默认搜索类型",
     "options": [
       "auto",
-      "neural",
-      "fast",
-      "deep-lite",
-      "deep",
-      "deep-reasoning",
-      "instant"
+      "keyword",
+      "neural"
     ],
     "default": "auto"
   },

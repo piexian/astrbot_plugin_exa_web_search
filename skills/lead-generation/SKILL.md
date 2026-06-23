@@ -1,16 +1,16 @@
 ---
 name: lead-generation
-description: 使用 Exa 深度搜索生成潜在客户列表。匹配 ICP 查找公司，用信号/新闻/评分进行丰富。适用于线索生成、构建潜在客户列表、outbound 调研或基于 ICP 的公司发现。
+description: 使用 Exa 搜索生成潜在客户列表。匹配 ICP 查找公司，用信号/新闻/评分进行丰富。适用于线索生成、构建潜在客户列表、outbound 调研或基于 ICP 的公司发现。
 ---
 
 # 线索生成 (Lead Generation)
 
-通过多轮 Exa 深度搜索，跨微垂直领域生成大规模、丰富的潜在客户列表。
+通过多轮 Exa 搜索，跨微垂直领域生成大规模、丰富的潜在客户列表。
 
 ## 可用工具
 
-- `web_search_exa` — 语义搜索（使用 `search_type="deep"` 进行深度搜索）
-- `exa_extract_web_page` — 提取公司网页详情做深度丰富
+- `web_search_exa` — 语义搜索（默认使用推荐的 `auto` 类型）
+- `web_fetch_exa` — 提取公司网页详情做深度丰富
 - `exa_find_similar` — 从已知目标公司发现相似公司
 
 ## 工作流程
@@ -28,7 +28,7 @@ description: 使用 Exa 深度搜索生成潜在客户列表。匹配 ICP 查找
 用户说 "为 [公司] 生成 XX 条线索" 时，先搜索了解公司产品和 ICP：
 
 ```
-web_search_exa(query="About {company_name}, {company_name} customers", search_type="deep", max_results=10)
+web_search_exa(query="About {company_name}, {company_name} customers", max_results=10)
 ```
 
 向用户确认：
@@ -57,10 +57,10 @@ web_search_exa(query="About {company_name}, {company_name} customers", search_ty
 
 ## 第 3 步：批量搜索
 
-对每个微垂直领域执行深度搜索：
+对每个微垂直领域执行搜索：
 
 ```
-web_search_exa(query="{micro_vertical}", search_type="deep", category="company", max_results=50)
+web_search_exa(query="{micro_vertical}", category="company", max_results=50)
 ```
 
 对高价值目标，可用 `exa_find_similar` 扩展：
@@ -80,7 +80,7 @@ exa_find_similar(url="https://high-value-company.com", max_results=20)
 
 ## 性能提示
 
-- 使用 `search_type="deep"` 获取最佳结果
+- 默认使用 `search_type="auto"` 获取通用最佳结果
 - 每次搜索约返回 10-50 条结果
 - 生成足够多的微垂直查询，按 `ceil(目标数 / 30)` 估算
 - 大型列表（500+）执行前先确认用户意愿
