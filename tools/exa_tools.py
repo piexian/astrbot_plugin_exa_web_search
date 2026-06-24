@@ -26,8 +26,8 @@ class ExaWebSearchTool(FunctionTool):
                 "search_type": {
                     "type": "string",
                     "description": (
-                        "Optional. auto/neural/fast/deep-lite/deep/deep-reasoning/instant."
-                        " Default is auto."
+                        "Optional. auto/keyword/neural. Default is auto. "
+                        "Use auto unless the user explicitly requests keyword matching."
                     ),
                 },
                 "category": {
@@ -36,6 +36,29 @@ class ExaWebSearchTool(FunctionTool):
                         "Optional. company/people/research"
                         " paper/news/personal site/financial report."
                     ),
+                },
+                "include_domains": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Comma-separated domains to restrict results to."
+                    ),
+                },
+                "exclude_domains": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Comma-separated domains to exclude from results."
+                    ),
+                },
+                "start_published_date": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Start date filter in ISO 8601 format "
+                        "(e.g. 2024-01-01T00:00:00.000Z)."
+                    ),
+                },
+                "end_published_date": {
+                    "type": "string",
+                    "description": "Optional. End date filter in ISO 8601 format.",
                 },
             },
             "required": ["query"],
@@ -49,8 +72,17 @@ class ExaWebSearchTool(FunctionTool):
         max_results: float = 0,
         search_type: str = "",
         category: str = "",
+        include_domains: str = "",
+        exclude_domains: str = "",
+        start_published_date: str = "",
+        end_published_date: str = "",
     ) -> str:
-        from ..main import PLUGIN_NAME, ExaAPIError, _normalize_count
+        from ..main import (
+            PLUGIN_NAME,
+            ExaAPIError,
+            _normalize_count,
+            _normalize_search_type,
+        )
 
         plugin = self.plugin
         if plugin is None:
@@ -70,8 +102,12 @@ class ExaWebSearchTool(FunctionTool):
             results = await plugin._exa_search(
                 query,
                 num_results=num,
-                search_type=str(search_type).strip().lower(),
+                search_type=_normalize_search_type(search_type),
                 category=str(category).strip(),
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+                start_published_date=str(start_published_date).strip(),
+                end_published_date=str(end_published_date).strip(),
             )
             return json.dumps(results, ensure_ascii=False)
 
@@ -85,10 +121,10 @@ class ExaWebSearchTool(FunctionTool):
 
 
 @dataclass
-class ExaExtractWebPageTool(FunctionTool):
+class ExaWebFetchTool(FunctionTool):
     plugin: Any = None
-    name: str = "exa_extract_web_page"
-    description: str = "Extract the full text content of a web page using Exa."
+    name: str = "web_fetch_exa"
+    description: str = "Fetch the full text content of a web page using Exa."
     parameters: dict = field(
         default_factory=lambda: {
             "type": "object",
@@ -96,7 +132,14 @@ class ExaExtractWebPageTool(FunctionTool):
                 "url": {
                     "type": "string",
                     "description": "Required. Full HTTP/HTTPS URL.",
-                }
+                },
+                "max_characters": {
+                    "type": "number",
+                    "description": (
+                        "Optional. Maximum number of characters to return."
+                        " Default is 3000."
+                    ),
+                },
             },
             "required": ["url"],
         }
@@ -106,8 +149,9 @@ class ExaExtractWebPageTool(FunctionTool):
         self,
         event: AstrMessageEvent,
         url: str,
+        max_characters: float = 0,
     ) -> str:
-        from ..main import PLUGIN_NAME, ExaAPIError
+        from ..main import PLUGIN_NAME, ExaAPIError, _normalize_count
 
         plugin = self.plugin
         if plugin is None:
@@ -122,7 +166,13 @@ class ExaExtractWebPageTool(FunctionTool):
             return "Error: URL is required."
 
         try:
-            results = await plugin._exa_extract(url)
+            max_chars = _normalize_count(
+                max_characters or 3000,
+                default=3000,
+                minimum=1,
+                maximum=100000,
+            )
+            results = await plugin._exa_extract(url, max_characters=max_chars)
             return json.dumps(results, ensure_ascii=False)
 
         except ExaAPIError as e:
@@ -132,7 +182,7 @@ class ExaExtractWebPageTool(FunctionTool):
         except Exception as e:
             from astrbot.api import logger
 
-            logger.error(f"[{PLUGIN_NAME}] exa_extract_web_page exception: {e}")
+            logger.error(f"[{PLUGIN_NAME}] web_fetch_exa exception: {e}")
             return f"Error: Exa content extraction exception: {e}"
 
 

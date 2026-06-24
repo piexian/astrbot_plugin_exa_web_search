@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- **语义搜索** — 基于 Exa 的搜索引擎，支持 7 种搜索类型（auto/neural/fast/deep-lite/deep/deep-reasoning/instant）
+- **语义搜索** — 基于 Exa 的搜索引擎，默认使用推荐的 `auto` 搜索类型
 - **网页内容提取** — 提取指定 URL 的完整文本内容
 - **相似页面发现** — 查找与给定 URL 语义相似的网页
 - **多 API Key 轮询** — 支持配置多个 Key 进行轮询
@@ -34,7 +34,7 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 | Exa API Base URL | 自定义 API 地址（代理/中转站） | `https://api.exa.ai` |
 | 请求超时时间 | API 请求最大等待秒数 | `30` |
 | 搜索返回最大条数 | 搜索结果数量（1-100） | `10` |
-| 默认搜索类型 | auto/neural/fast/deep-lite/deep/deep-reasoning/instant | `auto` |
+| 默认搜索类型 | auto/keyword/neural（推荐 auto） | `auto` |
 | 显示来源 URL | 指令结果中是否显示来源 | `true` |
 | 最大来源数量 | 显示的来源链接数量 | `5` |
 | 最大重试次数 | 指令调用时的重试次数 | `3` |
@@ -54,8 +54,8 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 插件注册了 3 个 LLM Tool，大模型会在需要时自动调用：
 
 - **`web_search_exa`** — 语义搜索（支持搜索类型和垂直分类）
-- **`exa_extract_web_page`** — 提取网页完整内容
-- **`exa_find_similar`** — 查找相似页面
+- **`web_fetch_exa`** — 提取网页完整内容
+- **`exa_find_similar`** — 查找相似页面（保留兼容，若 Exa 后续停用端点再移除）
 
 例如，当你对 AI 说"帮我搜一下最近的 AI 新闻"时，模型会自动调用 `web_search_exa` 并整理结果回复你。
 
@@ -63,13 +63,9 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 
 | 类型 | 说明 |
 |------|------|
-| `auto` | 智能选择最佳搜索方式（默认） |
-| `neural` | 基于 embedding 的语义搜索 |
-| `fast` | 快速搜索模式 |
-| `instant` | 最低延迟搜索，适合实时应用 |
-| `deep-lite` | 轻量级深度搜索 |
-| `deep` | 标准深度搜索 |
-| `deep-reasoning` | 深度推理搜索 |
+| `auto` | 智能选择最佳搜索方式（默认，推荐） |
+| `keyword` | 传统关键词匹配 |
+| `neural` | 旧版语义搜索兼容选项，新配置优先使用 `auto` |
 
 ## 垂直搜索分类
 
@@ -102,7 +98,7 @@ astrbot_plugin_exa_web_search/
 │   └── personal-site-search/SKILL.md   # 个人站点搜索
 ├── tools/                      # Class-based LLM 工具定义
 │   ├── __init__.py
-│   └── exa_tools.py            # web_search_exa, exa_extract_web_page, exa_find_similar
+│   └── exa_tools.py            # web_search_exa, web_fetch_exa, exa_find_similar
 ├── _conf_schema.json           # AstrBot 控制台配置 UI 定义
 ├── main.py                     # 插件核心逻辑 (指令注册和初始化)
 ├── metadata.yaml               # 插件元信息

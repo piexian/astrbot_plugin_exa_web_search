@@ -13,9 +13,7 @@ PLUGIN_NAME = "astrbot_plugin_exa_web_search"
 
 # --- Exa API 常量 ---
 
-_EXA_SEARCH_TYPES = frozenset(
-    {"auto", "neural", "fast", "deep-lite", "deep", "deep-reasoning", "instant"}
-)
+_EXA_SEARCH_TYPES = frozenset({"auto", "keyword", "neural"})
 
 # 垂直搜索分类
 _EXA_CATEGORIES = frozenset(
@@ -115,6 +113,14 @@ def _normalize_count(value, *, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(n, maximum))
 
 
+def _normalize_search_type(search_type: str) -> str:
+    """规范化搜索类型，旧配置值自动回退到 auto。"""
+    normalized = str(search_type or "").strip().lower()
+    if normalized in _EXA_SEARCH_TYPES:
+        return normalized
+    return "auto"
+
+
 def _normalize_timeout(timeout_seconds) -> aiohttp.ClientTimeout:
     """构造 aiohttp 超时对象，确保最小值。"""
     try:
@@ -160,14 +166,14 @@ class ExaWebSearchPlugin(Star):
 
         # 注册 LLM 函数工具
         from .tools.exa_tools import (
-            ExaExtractWebPageTool,
             ExaFindSimilarTool,
+            ExaWebFetchTool,
             ExaWebSearchTool,
         )
 
         self.context.add_llm_tools(
             ExaWebSearchTool(plugin=self),
-            ExaExtractWebPageTool(plugin=self),
+            ExaWebFetchTool(plugin=self),
             ExaFindSimilarTool(plugin=self),
         )
 
@@ -323,12 +329,14 @@ class ExaWebSearchPlugin(Star):
         num_results: int = 10,
         search_type: str = "auto",
         category: str = "",
+        include_domains: str = "",
+        exclude_domains: str = "",
+        start_published_date: str = "",
+        end_published_date: str = "",
         timeout: int | None = None,
     ) -> list[dict]:
         """调用 Exa search 端点。"""
-        # 校验搜索类型
-        if search_type not in _EXA_SEARCH_TYPES:
-            search_type = "auto"
+        search_type = _normalize_search_type(search_type)
 
         payload: dict = {
             "query": query,
@@ -340,6 +348,23 @@ class ExaWebSearchPlugin(Star):
         if category and category in _EXA_CATEGORIES:
             payload["category"] = category
 
+        include_domains = str(include_domains or "").strip()
+        if include_domains:
+            payload["includeDomains"] = [
+                d.strip() for d in include_domains.split(",") if d.strip()
+            ]
+
+        exclude_domains = str(exclude_domains or "").strip()
+        if exclude_domains:
+            payload["excludeDomains"] = [
+                d.strip() for d in exclude_domains.split(",") if d.strip()
+            ]
+
+        if start_published_date:
+            payload["startPublishedDate"] = start_published_date
+        if end_published_date:
+            payload["endPublishedDate"] = end_published_date
+
         data = await self._exa_request("/search", payload, timeout=timeout)
         return data.get("results", [])
 
@@ -347,15 +372,16 @@ class ExaWebSearchPlugin(Star):
         self,
         url: str,
         *,
+        max_characters: int = 3000,
         timeout: int | None = None,
     ) -> list[dict]:
         """调用 Exa contents 端点提取网页内容。
 
-        注意：contents 端点的 text/highlights/summary 是顶层参数。
+        与 Exa 官方保持一致：通过 ids 提取内容。
         """
         payload = {
-            "urls": [url],
-            "text": True,
+            "ids": [url],
+            "text": {"maxCharacters": max_characters},
         }
 
         data = await self._exa_request("/contents", payload, timeout=timeout)
@@ -521,7 +547,7 @@ class ExaWebSearchPlugin(Star):
             key_status = ", ".join(_mask_key(k) for k in keys)
         else:
             key_status = "未配置 "
-        search_type = self.config.get("default_search_type", "auto")
+        search_type = _normalize_search_type(self.config.get("default_search_type"))
         max_results = self.config.get("max_results", 10)
 
         return (
@@ -539,7 +565,7 @@ class ExaWebSearchPlugin(Star):
             "调用方式:\n"
             "  - /exa 指令：直接搜索并返回结果\n"
             "  - LLM Tool：模型自动调用 web_search_exa\n"
-            "  - LLM Tool：模型自动调用 exa_extract_web_page\n"
+            "  - LLM Tool：模型自动调用 web_fetch_exa\n"
             "  - LLM Tool：模型自动调用 exa_find_similar\n"
             "\n"
             f"当前配置:\n"
@@ -567,7 +593,7 @@ class ExaWebSearchPlugin(Star):
             return
 
         # 获取配置
-        search_type = self.config.get("default_search_type", "auto")
+        search_type = _normalize_search_type(self.config.get("default_search_type"))
         max_results = _normalize_count(
             self.config.get("max_results", 10),
             default=10,

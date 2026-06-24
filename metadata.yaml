@@ -1,7 +1,7 @@
 name: astrbot_plugin_exa_web_search
 display_name: Exa联网搜索
 desc: 通过 Exa API 进行联网搜索，支持指令和 LLM Tool 调用。
-version: v1.0.2
+version: v1.0.3
 author: piexian
 repo: https://github.com/piexian/astrbot_plugin_exa_web_search
 astrbot_version: ">=4.9.2"
