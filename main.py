@@ -329,6 +329,10 @@ class ExaWebSearchPlugin(Star):
         num_results: int = 10,
         search_type: str = "auto",
         category: str = "",
+        include_domains: str = "",
+        exclude_domains: str = "",
+        start_published_date: str = "",
+        end_published_date: str = "",
         timeout: int | None = None,
     ) -> list[dict]:
         """调用 Exa search 端点。"""
@@ -344,6 +348,23 @@ class ExaWebSearchPlugin(Star):
         if category and category in _EXA_CATEGORIES:
             payload["category"] = category
 
+        include_domains = str(include_domains or "").strip()
+        if include_domains:
+            payload["includeDomains"] = [
+                d.strip() for d in include_domains.split(",") if d.strip()
+            ]
+
+        exclude_domains = str(exclude_domains or "").strip()
+        if exclude_domains:
+            payload["excludeDomains"] = [
+                d.strip() for d in exclude_domains.split(",") if d.strip()
+            ]
+
+        if start_published_date:
+            payload["startPublishedDate"] = start_published_date
+        if end_published_date:
+            payload["endPublishedDate"] = end_published_date
+
         data = await self._exa_request("/search", payload, timeout=timeout)
         return data.get("results", [])
 
@@ -351,15 +372,16 @@ class ExaWebSearchPlugin(Star):
         self,
         url: str,
         *,
+        max_characters: int = 3000,
         timeout: int | None = None,
     ) -> list[dict]:
         """调用 Exa contents 端点提取网页内容。
 
-        注意：contents 端点的 text/highlights/summary 是顶层参数。
+        与 Exa 官方保持一致：通过 ids 提取内容。
         """
         payload = {
-            "urls": [url],
-            "text": True,
+            "ids": [url],
+            "text": {"maxCharacters": max_characters},
         }
 
         data = await self._exa_request("/contents", payload, timeout=timeout)
