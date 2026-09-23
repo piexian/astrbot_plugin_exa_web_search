@@ -9,11 +9,13 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 
+from .tools.exa_content import build_contents_payload
 from .tools.exa_context import build_context_payload
 from .tools.exa_response import normalize_cost_total
 from .tools.exa_search import (
     MIN_TIMEOUT_SECONDS,
     build_search_payload,
+    get_result_snippet,
     normalize_search_type,
     resolve_timeout_seconds,
 )
@@ -311,9 +313,13 @@ class ExaWebSearchPlugin(Star):
         exclude_domains: str = "",
         start_published_date: str = "",
         end_published_date: str = "",
+        user_location: str = "",
+        moderation: bool | None = None,
         timeout: int | None = None,
     ) -> list[dict]:
         """调用 Exa search 端点。"""
+        if moderation is None:
+            moderation = bool(self.config.get("moderation", False))
         payload = build_search_payload(
             query,
             num_results=num_results,
@@ -323,6 +329,8 @@ class ExaWebSearchPlugin(Star):
             exclude_domains=exclude_domains,
             start_published_date=start_published_date,
             end_published_date=end_published_date,
+            user_location=user_location,
+            moderation=moderation,
         )
         if timeout is None:
             timeout = self.config.get("timeout_seconds", MIN_TIMEOUT_SECONDS)
@@ -348,16 +356,18 @@ class ExaWebSearchPlugin(Star):
         url: str,
         *,
         max_characters: int = 3000,
+        max_age_hours: int | None = None,
         timeout: int | None = None,
     ) -> list[dict]:
         """调用 Exa contents 端点提取网页内容。
 
         与 Exa 官方保持一致：通过 ids 提取内容。
         """
-        payload = {
-            "ids": [url],
-            "text": {"maxCharacters": max_characters},
-        }
+        payload = build_contents_payload(
+            url,
+            max_characters=max_characters,
+            max_age_hours=max_age_hours,
+        )
 
         data = await self._exa_request("/contents", payload, timeout=timeout)
 
@@ -460,7 +470,7 @@ class ExaWebSearchPlugin(Star):
             else:
                 lines.append(f"  {i}. {url}")
             if with_snippet:
-                snippet = (item.get("text") or "")[:200]
+                snippet = get_result_snippet(item)[:200]
                 if snippet:
                     lines.append(f"     {snippet}")
         return lines
@@ -479,7 +489,7 @@ class ExaWebSearchPlugin(Star):
         lines = []
         for item in results:
             title = item.get("title", "")
-            text = (item.get("text") or "")[:300]
+            text = get_result_snippet(item)[:300]
             if title:
                 lines.append(f"**{title}**")
             if text:

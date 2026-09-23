@@ -47,6 +47,26 @@ def _split_domains(value: str) -> list[str]:
     return [domain.strip() for domain in value.split(",") if domain.strip()]
 
 
+def normalize_user_location(value: object) -> str:
+    """Normalize an optional ISO two-letter user location."""
+    location = str(value or "").strip().upper()
+    return (
+        location
+        if len(location) == 2 and location.isascii() and location.isalpha()
+        else ""
+    )
+
+
+def get_result_snippet(result: dict) -> str:
+    """Return highlights when available, otherwise text."""
+    highlights = result.get("highlights")
+    if isinstance(highlights, list):
+        snippets = [str(item) for item in highlights if item]
+        if snippets:
+            return "\n".join(snippets)
+    return str(result.get("text") or "")
+
+
 def validate_search_filters(
     category: str,
     *,
@@ -83,10 +103,13 @@ def build_search_payload(
     exclude_domains: str = "",
     start_published_date: str = "",
     end_published_date: str = "",
+    user_location: str = "",
+    moderation: bool = False,
 ) -> dict:
     """Build and validate a current Exa search request payload."""
     normalized_type = normalize_search_type(search_type)
     normalized_category = normalize_category(category)
+    user_location = normalize_user_location(user_location)
     include_domains = str(include_domains or "").strip()
     exclude_domains = str(exclude_domains or "").strip()
     start_published_date = str(start_published_date or "").strip()
@@ -103,8 +126,12 @@ def build_search_payload(
         "query": query,
         "numResults": num_results,
         "type": normalized_type,
-        "contents": {"text": {"maxCharacters": 500}},
+        "contents": {"highlights": True},
     }
+    if user_location:
+        payload["userLocation"] = user_location
+    if moderation:
+        payload["moderation"] = True
     if normalized_category:
         payload["category"] = normalized_category
     if include_domains:

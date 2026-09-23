@@ -35,6 +35,7 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 | 请求超时时间 | API 请求最大等待秒数 | `30` |
 | 搜索返回最大条数 | 搜索结果数量（1-100） | `10` |
 | 默认搜索类型 | instant/fast/auto/deep-lite/deep/deep-reasoning（推荐 auto） | `auto` |
+| 启用内容审核 | 由 Exa 过滤不安全内容 | `false` |
 | 显示来源 URL | 指令结果中是否显示来源 | `true` |
 | 最大来源数量 | 显示的来源链接数量 | `5` |
 | 最大重试次数 | 指令调用时的重试次数 | `3` |
@@ -56,6 +57,7 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 - **`exa-code-context`** — 获取代码示例和实现上下文
 - **`exa-search`** — 语义搜索（支持搜索类型和垂直分类）
 - **`web_fetch_exa`** — 提取网页完整内容
+  - `exa-search` 默认返回 Highlights；`web_fetch_exa` 支持 `max_age_hours` 控制内容新鲜度，`exa-search` 支持 `user_location`。
 
 例如，当你对 AI 说"帮我搜一下最近的 AI 新闻"时，模型会自动调用 `exa-search` 并整理结果回复你。
 
@@ -95,7 +97,7 @@ EXA50BUILDCLUB
 ```
 astrbot_plugin_exa_web_search/
 ├── .github/workflows/ci.yml   # CI：单元测试 + ruff lint/format + 语法检查 + 元数据校验
-├── tests/                     # 搜索与代码上下文单元测试
+├── tests/                     # 搜索、内容和代码上下文单元测试
 ├── skills/                     # LLM 搜索技能指引（自动加载）
 │   ├── company-research/SKILL.md       # 企业调研
 │   ├── lead-generation/SKILL.md        # 线索生成
@@ -107,6 +109,7 @@ astrbot_plugin_exa_web_search/
 ├── tools/                      # Class-based LLM 工具定义
 │   ├── __init__.py
 │   ├── exa_context.py          # Exa Code Context 参数校验
+│   ├── exa_content.py          # Contents 内容参数校验
 │   ├── exa_search.py           # 搜索参数规范化与校验
 │   └── exa_tools.py            # exa-search, exa-code-context, web_fetch_exa
 ├── _conf_schema.json           # AstrBot 控制台配置 UI 定义

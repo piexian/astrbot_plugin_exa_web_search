@@ -4,8 +4,10 @@ from tools.exa_search import (
     SEARCH_CATEGORIES,
     SEARCH_TYPES,
     build_search_payload,
+    get_result_snippet,
     normalize_category,
     normalize_search_type,
+    normalize_user_location,
     resolve_timeout_seconds,
 )
 
@@ -58,6 +60,29 @@ class ExaSearchContractTests(unittest.TestCase):
         self.assertEqual(payload["type"], "deep")
         self.assertEqual(payload["category"], "publication")
         self.assertEqual(payload["includeDomains"], ["arxiv.org", "example.com"])
+
+    def test_search_uses_highlights_and_optional_filters(self):
+        payload = build_search_payload(
+            "latest AI news",
+            user_location="us",
+            moderation=True,
+        )
+        self.assertEqual(payload["contents"], {"highlights": True})
+        self.assertNotIn("moderation", build_search_payload("query"))
+        self.assertEqual(payload["userLocation"], "US")
+        self.assertTrue(payload["moderation"])
+
+    def test_invalid_user_location_is_omitted(self):
+        self.assertEqual(normalize_user_location("USA"), "")
+        self.assertEqual(normalize_user_location("us"), "US")
+        self.assertEqual(normalize_user_location("中国"), "")
+
+    def test_highlights_are_preferred_for_snippets(self):
+        self.assertEqual(
+            get_result_snippet({"highlights": ["first", "second"], "text": "full"}),
+            "first\nsecond",
+        )
+        self.assertEqual(get_result_snippet({"text": "full"}), "full")
 
     def test_vertical_date_filters_are_rejected_before_request(self):
         for category in ("company", "people"):
