@@ -7,7 +7,7 @@ description: 使用 Exa 搜索学术论文和科研内容。查找 arXiv 预印�
 
 ## 可用工具
 
-- `web_search_exa` — 语义搜索学术论文（使用 `category="research paper"`）
+- `exa-search` — 语义搜索学术论文（使用 `category="publication"`）
 - `web_fetch_exa` — 提取论文/文档的完整内容
 
 ## 适用场景
@@ -21,12 +21,12 @@ description: 使用 Exa 搜索学术论文和科研内容。查找 arXiv 预印�
 
 ### 某主题的近期论文
 ```
-web_search_exa(query="transformer attention mechanisms efficiency 2024", category="research paper", max_results=15)
+exa-search(query="transformer attention mechanisms efficiency 2024", category="publication", max_results=15)
 ```
 
 ### 搜索特定领域
 ```
-web_search_exa(query="large language model agents tool use", category="research paper", max_results=20)
+exa-search(query="large language model agents tool use", category="publication", max_results=20)
 ```
 
 ### 提取论文详细内容
@@ -36,7 +36,7 @@ web_fetch_exa(url="https://arxiv.org/abs/2401.xxxxx")
 
 ## 文献综述流程
 
-1. 用 `web_search_exa` 搜索核心主题，获取初始论文列表
+1. 用 `exa-search` 搜索核心主题，获取初始论文列表
 2. 用 `web_fetch_exa` 提取关键论文的摘要和方法论
 
 ## 输出格式

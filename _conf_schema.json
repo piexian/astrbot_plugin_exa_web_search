@@ -14,7 +14,7 @@
   "timeout_seconds": {
     "type": "int",
     "description": "请求超时时间（秒）",
-    "hint": "控制每次 API 请求的最大等待时间，最小 30 秒",
+    "hint": "控制每次 API 请求的最大等待时间；deep 至少 60 秒，deep-reasoning 至少 90 秒",
     "default": 30,
     "slider": {
       "min": 30,
@@ -37,9 +37,12 @@
     "type": "string",
     "description": "默认搜索类型",
     "options": [
+      "instant",
+      "fast",
       "auto",
-      "keyword",
-      "neural"
+      "deep-lite",
+      "deep",
+      "deep-reasoning"
     ],
     "default": "auto"
   },

@@ -9,7 +9,7 @@ description: 使用 Exa 搜索生成潜在客户列表。匹配 ICP 查找公司
 
 ## 可用工具
 
-- `web_search_exa` — 语义搜索（默认使用推荐的 `auto` 类型）
+- `exa-search` — 语义搜索（默认使用推荐的 `auto` 类型）
 - `web_fetch_exa` — 提取公司网页详情做深度丰富
 
 ## 工作流程
@@ -27,7 +27,7 @@ description: 使用 Exa 搜索生成潜在客户列表。匹配 ICP 查找公司
 用户说 "为 [公司] 生成 XX 条线索" 时，先搜索了解公司产品和 ICP：
 
 ```
-web_search_exa(query="About {company_name}, {company_name} customers", max_results=10)
+exa-search(query="About {company_name}, {company_name} customers", max_results=10)
 ```
 
 向用户确认：
@@ -59,7 +59,7 @@ web_search_exa(query="About {company_name}, {company_name} customers", max_resul
 对每个微垂直领域执行搜索：
 
 ```
-web_search_exa(query="{micro_vertical}", category="company", max_results=50)
+exa-search(query="{micro_vertical}", category="company", max_results=50)
 ```
 
 ## 第 4 步：去重排序

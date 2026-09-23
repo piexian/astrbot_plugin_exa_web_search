@@ -33,7 +33,7 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 | Exa API Base URL | 自定义 API 地址（代理/中转站） | `https://api.exa.ai` |
 | 请求超时时间 | API 请求最大等待秒数 | `30` |
 | 搜索返回最大条数 | 搜索结果数量（1-100） | `10` |
-| 默认搜索类型 | auto/keyword/neural（推荐 auto） | `auto` |
+| 默认搜索类型 | instant/fast/auto/deep-lite/deep/deep-reasoning（推荐 auto） | `auto` |
 | 显示来源 URL | 指令结果中是否显示来源 | `true` |
 | 最大来源数量 | 显示的来源链接数量 | `5` |
 | 最大重试次数 | 指令调用时的重试次数 | `3` |
@@ -52,24 +52,31 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 
 插件注册了 2 个 LLM Tool，大模型会在需要时自动调用：
 
-- **`web_search_exa`** — 语义搜索（支持搜索类型和垂直分类）
+- **`exa-search`** — 语义搜索（支持搜索类型和垂直分类）
 - **`web_fetch_exa`** — 提取网页完整内容
 
-例如，当你对 AI 说"帮我搜一下最近的 AI 新闻"时，模型会自动调用 `web_search_exa` 并整理结果回复你。
+例如，当你对 AI 说"帮我搜一下最近的 AI 新闻"时，模型会自动调用 `exa-search` 并整理结果回复你。
 
 ## 搜索类型说明
 
 | 类型 | 说明 |
 |------|------|
-| `auto` | 智能选择最佳搜索方式（默认，推荐） |
-| `keyword` | 传统关键词匹配 |
-| `neural` | 旧版语义搜索兼容选项，新配置优先使用 `auto` |
+| `instant` | 最低延迟，适合实时场景 |
+| `fast` | 低延迟高质量搜索 |
+| `auto` | 智能平衡速度和质量（默认，推荐） |
+| `deep-lite` | 轻量深度研究 |
+| `deep` | 多步研究和综合 |
+| `deep-reasoning` | 复杂推理任务 |
+
+旧配置 `keyword`、`neural` 和旧分类 `research paper` 会分别按 `auto`、`publication` 处理。`deep` 和 `deep-reasoning` 的请求超时至少为 60 秒和 90 秒。
 
 ## 垂直搜索分类
 
-LLM Tool `web_search_exa` 支持以下分类：
+LLM Tool `exa-search` 支持以下分类：
 
-`company` / `people` / `research paper` / `news` / `personal site` / `financial report`
+`company` / `people` / `publication` / `news` / `personal site` / `financial report`
+
+`company` 和 `people` 不支持 `excludeDomains`、`startPublishedDate` 或 `endPublishedDate`。
 
 ## EXA额度
 
@@ -85,7 +92,8 @@ EXA50BUILDCLUB
 
 ```
 astrbot_plugin_exa_web_search/
-├── .github/workflows/ci.yml   # CI：ruff lint/format + 语法检查 + 元数据校验
+├── .github/workflows/ci.yml   # CI：单元测试 + ruff lint/format + 语法检查 + 元数据校验
+├── tests/                     # 搜索契约单元测试
 ├── skills/                     # LLM 搜索技能指引（自动加载）
 │   ├── company-research/SKILL.md       # 企业调研
 │   ├── lead-generation/SKILL.md        # 线索生成
@@ -96,7 +104,8 @@ astrbot_plugin_exa_web_search/
 │   └── personal-site-search/SKILL.md   # 个人站点搜索
 ├── tools/                      # Class-based LLM 工具定义
 │   ├── __init__.py
-│   └── exa_tools.py            # web_search_exa, web_fetch_exa
+│   ├── exa_search.py           # 搜索参数规范化与校验
+│   └── exa_tools.py            # exa-search, web_fetch_exa
 ├── _conf_schema.json           # AstrBot 控制台配置 UI 定义
 ├── main.py                     # 插件核心逻辑 (指令注册和初始化)
 ├── metadata.yaml               # 插件元信息

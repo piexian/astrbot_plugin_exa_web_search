@@ -5,11 +5,13 @@ from typing import Any
 from astrbot.api import FunctionTool
 from astrbot.api.event import AstrMessageEvent
 
+from .exa_search import SEARCH_CATEGORIES, SEARCH_TYPES, normalize_search_type
+
 
 @dataclass
-class ExaWebSearchTool(FunctionTool):
+class ExaSearchTool(FunctionTool):
     plugin: Any = None
-    name: str = "web_search_exa"
+    name: str = "exa-search"
     description: str = "Search the web using Exa. Use for general, vertical, and concept-oriented retrieval."
     parameters: dict = field(
         default_factory=lambda: {
@@ -17,7 +19,7 @@ class ExaWebSearchTool(FunctionTool):
             "properties": {
                 "query": {"type": "string", "description": "Required. Search query."},
                 "max_results": {
-                    "type": "number",
+                    "type": "integer",
                     "description": (
                         "Optional. The maximum number of results to return. Default is 10."
                         " Range is 1-100."
@@ -26,16 +28,18 @@ class ExaWebSearchTool(FunctionTool):
                 "search_type": {
                     "type": "string",
                     "description": (
-                        "Optional. auto/keyword/neural. Default is auto. "
-                        "Use auto unless the user explicitly requests keyword matching."
+                        "Optional. instant/fast/auto/deep-lite/deep/deep-reasoning. "
+                        "Default is auto."
                     ),
+                    "enum": sorted(SEARCH_TYPES),
                 },
                 "category": {
                     "type": "string",
                     "description": (
-                        "Optional. company/people/research"
-                        " paper/news/personal site/financial report."
+                        "Optional. company/publication/news/personal site/"
+                        "financial report/people."
                     ),
+                    "enum": sorted(SEARCH_CATEGORIES),
                 },
                 "include_domains": {
                     "type": "string",
@@ -69,7 +73,7 @@ class ExaWebSearchTool(FunctionTool):
         self,
         event: AstrMessageEvent,
         query: str,
-        max_results: float = 0,
+        max_results: int = 0,
         search_type: str = "",
         category: str = "",
         include_domains: str = "",
@@ -81,7 +85,6 @@ class ExaWebSearchTool(FunctionTool):
             PLUGIN_NAME,
             ExaAPIError,
             _normalize_count,
-            _normalize_search_type,
         )
 
         plugin = self.plugin
@@ -102,7 +105,7 @@ class ExaWebSearchTool(FunctionTool):
             results = await plugin._exa_search(
                 query,
                 num_results=num,
-                search_type=_normalize_search_type(search_type),
+                search_type=normalize_search_type(search_type),
                 category=str(category).strip(),
                 include_domains=include_domains,
                 exclude_domains=exclude_domains,
@@ -113,10 +116,12 @@ class ExaWebSearchTool(FunctionTool):
 
         except ExaAPIError as e:
             return f"Error: Exa search failed: {e}"
+        except ValueError as e:
+            return f"Error: {e}"
         except Exception as e:
             from astrbot.api import logger
 
-            logger.error(f"[{PLUGIN_NAME}] web_search_exa exception: {e}")
+            logger.error(f"[{PLUGIN_NAME}] exa-search exception: {e}")
             return f"Error: Exa search exception: {e}"
 
 
@@ -134,7 +139,7 @@ class ExaWebFetchTool(FunctionTool):
                     "description": "Required. Full HTTP/HTTPS URL.",
                 },
                 "max_characters": {
-                    "type": "number",
+                    "type": "integer",
                     "description": (
                         "Optional. Maximum number of characters to return."
                         " Default is 3000."
@@ -149,7 +154,7 @@ class ExaWebFetchTool(FunctionTool):
         self,
         event: AstrMessageEvent,
         url: str,
-        max_characters: float = 0,
+        max_characters: int = 0,
     ) -> str:
         from ..main import PLUGIN_NAME, ExaAPIError, _normalize_count
 

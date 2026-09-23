@@ -9,26 +9,14 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 
-PLUGIN_NAME = "astrbot_plugin_exa_web_search"
-
-# --- Exa API 常量 ---
-
-_EXA_SEARCH_TYPES = frozenset({"auto", "keyword", "neural"})
-
-# 垂直搜索分类
-_EXA_CATEGORIES = frozenset(
-    {
-        "company",
-        "people",
-        "research paper",
-        "news",
-        "personal site",
-        "financial report",
-    }
+from .tools.exa_search import (
+    MIN_TIMEOUT_SECONDS,
+    build_search_payload,
+    normalize_search_type,
+    resolve_timeout_seconds,
 )
 
-# 最小超时时间（秒）
-_MIN_TIMEOUT = 30
+PLUGIN_NAME = "astrbot_plugin_exa_web_search"
 
 # 可重试 HTTP 状态码
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503})
@@ -113,21 +101,10 @@ def _normalize_count(value, *, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(n, maximum))
 
 
-def _normalize_search_type(search_type: str) -> str:
-    """规范化搜索类型，旧配置值自动回退到 auto。"""
-    normalized = str(search_type or "").strip().lower()
-    if normalized in _EXA_SEARCH_TYPES:
-        return normalized
-    return "auto"
-
-
 def _normalize_timeout(timeout_seconds) -> aiohttp.ClientTimeout:
     """构造 aiohttp 超时对象，确保最小值。"""
-    try:
-        t = max(int(timeout_seconds), _MIN_TIMEOUT)
-    except (TypeError, ValueError):
-        t = _MIN_TIMEOUT
-    return aiohttp.ClientTimeout(total=t)
+    timeout = resolve_timeout_seconds(timeout_seconds)
+    return aiohttp.ClientTimeout(total=timeout)
 
 
 def _format_exa_status_error(statuses: list[dict]) -> str | None:
@@ -165,10 +142,10 @@ class ExaWebSearchPlugin(Star):
         self._base_url: str = "https://api.exa.ai"
 
         # 注册 LLM 函数工具
-        from .tools.exa_tools import ExaWebFetchTool, ExaWebSearchTool
+        from .tools.exa_tools import ExaSearchTool, ExaWebFetchTool
 
         self.context.add_llm_tools(
-            ExaWebSearchTool(plugin=self),
+            ExaSearchTool(plugin=self),
             ExaWebFetchTool(plugin=self),
         )
 
@@ -237,7 +214,7 @@ class ExaWebSearchPlugin(Star):
             ExaAPIError: 请求失败时抛出
         """
         if timeout is None:
-            timeout = self.config.get("timeout_seconds", _MIN_TIMEOUT)
+            timeout = self.config.get("timeout_seconds", MIN_TIMEOUT_SECONDS)
 
         api_key = await self._get_api_key()
         url = f"{self._base_url}{endpoint}"
@@ -331,36 +308,20 @@ class ExaWebSearchPlugin(Star):
         timeout: int | None = None,
     ) -> list[dict]:
         """调用 Exa search 端点。"""
-        search_type = _normalize_search_type(search_type)
-
-        payload: dict = {
-            "query": query,
-            "numResults": num_results,
-            "type": search_type,
-            "contents": {"text": {"maxCharacters": 500}},
-        }
-
-        if category and category in _EXA_CATEGORIES:
-            payload["category"] = category
-
-        include_domains = str(include_domains or "").strip()
-        if include_domains:
-            payload["includeDomains"] = [
-                d.strip() for d in include_domains.split(",") if d.strip()
-            ]
-
-        exclude_domains = str(exclude_domains or "").strip()
-        if exclude_domains:
-            payload["excludeDomains"] = [
-                d.strip() for d in exclude_domains.split(",") if d.strip()
-            ]
-
-        if start_published_date:
-            payload["startPublishedDate"] = start_published_date
-        if end_published_date:
-            payload["endPublishedDate"] = end_published_date
-
-        data = await self._exa_request("/search", payload, timeout=timeout)
+        payload = build_search_payload(
+            query,
+            num_results=num_results,
+            search_type=search_type,
+            category=category,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+            start_published_date=start_published_date,
+            end_published_date=end_published_date,
+        )
+        if timeout is None:
+            timeout = self.config.get("timeout_seconds", MIN_TIMEOUT_SECONDS)
+        request_timeout = resolve_timeout_seconds(timeout, payload["type"])
+        data = await self._exa_request("/search", payload, timeout=request_timeout)
         return data.get("results", [])
 
     async def _exa_extract(
@@ -525,7 +486,7 @@ class ExaWebSearchPlugin(Star):
             key_status = ", ".join(_mask_key(k) for k in keys)
         else:
             key_status = "未配置 "
-        search_type = _normalize_search_type(self.config.get("default_search_type"))
+        search_type = normalize_search_type(self.config.get("default_search_type"))
         max_results = self.config.get("max_results", 10)
 
         return (
@@ -542,7 +503,7 @@ class ExaWebSearchPlugin(Star):
             "\n"
             "调用方式:\n"
             "  - /exa 指令：直接搜索并返回结果\n"
-            "  - LLM Tool：模型自动调用 web_search_exa\n"
+            "  - LLM Tool：模型自动调用 exa-search\n"
             "  - LLM Tool：模型自动调用 web_fetch_exa\n"
             "\n"
             f"当前配置:\n"
@@ -570,7 +531,7 @@ class ExaWebSearchPlugin(Star):
             return
 
         # 获取配置
-        search_type = _normalize_search_type(self.config.get("default_search_type"))
+        search_type = normalize_search_type(self.config.get("default_search_type"))
         max_results = _normalize_count(
             self.config.get("max_results", 10),
             default=10,
