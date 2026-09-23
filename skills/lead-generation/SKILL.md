@@ -11,7 +11,6 @@ description: 使用 Exa 搜索生成潜在客户列表。匹配 ICP 查找公司
 
 - `web_search_exa` — 语义搜索（默认使用推荐的 `auto` 类型）
 - `web_fetch_exa` — 提取公司网页详情做深度丰富
-- `exa_find_similar` — 从已知目标公司发现相似公司
 
 ## 工作流程
 
@@ -61,11 +60,6 @@ web_search_exa(query="About {company_name}, {company_name} customers", max_resul
 
 ```
 web_search_exa(query="{micro_vertical}", category="company", max_results=50)
-```
-
-对高价值目标，可用 `exa_find_similar` 扩展：
-```
-exa_find_similar(url="https://high-value-company.com", max_results=20)
 ```
 
 ## 第 4 步：去重排序

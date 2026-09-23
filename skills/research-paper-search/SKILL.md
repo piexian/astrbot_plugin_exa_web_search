@@ -9,7 +9,6 @@ description: 使用 Exa 搜索学术论文和科研内容。查找 arXiv 预印�
 
 - `web_search_exa` — 语义搜索学术论文（使用 `category="research paper"`）
 - `web_fetch_exa` — 提取论文/文档的完整内容
-- `exa_find_similar` — 从已知论文发现相关研究
 
 ## 适用场景
 
@@ -35,16 +34,10 @@ web_search_exa(query="large language model agents tool use", category="research 
 web_fetch_exa(url="https://arxiv.org/abs/2401.xxxxx")
 ```
 
-### 发现相关论文
-```
-exa_find_similar(url="https://arxiv.org/abs/2401.xxxxx", max_results=15)
-```
-
 ## 文献综述流程
 
 1. 用 `web_search_exa` 搜索核心主题，获取初始论文列表
-2. 用 `exa_find_similar` 从高质量论文扩展发现相关研究
-3. 用 `web_fetch_exa` 提取关键论文的摘要和方法论
+2. 用 `web_fetch_exa` 提取关键论文的摘要和方法论
 
 ## 输出格式
 
