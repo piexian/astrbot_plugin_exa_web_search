@@ -6,7 +6,6 @@
 
 - **语义搜索** — 基于 Exa 的搜索引擎，默认使用推荐的 `auto` 搜索类型
 - **网页内容提取** — 提取指定 URL 的完整文本内容
-- **相似页面发现** — 查找与给定 URL 语义相似的网页
 - **多 API Key 轮询** — 支持配置多个 Key 进行轮询
 - **指令 + LLM Tool** — 既可 `/exa` 手动搜索，也可由 AI 自动调用
 - **自定义 Base URL** — 支持代理地址
@@ -51,11 +50,10 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 
 ### LLM Tool 自动调用
 
-插件注册了 3 个 LLM Tool，大模型会在需要时自动调用：
+插件注册了 2 个 LLM Tool，大模型会在需要时自动调用：
 
 - **`web_search_exa`** — 语义搜索（支持搜索类型和垂直分类）
 - **`web_fetch_exa`** — 提取网页完整内容
-- **`exa_find_similar`** — 查找相似页面（保留兼容，若 Exa 后续停用端点再移除）
 
 例如，当你对 AI 说"帮我搜一下最近的 AI 新闻"时，模型会自动调用 `web_search_exa` 并整理结果回复你。
 
@@ -98,7 +96,7 @@ astrbot_plugin_exa_web_search/
 │   └── personal-site-search/SKILL.md   # 个人站点搜索
 ├── tools/                      # Class-based LLM 工具定义
 │   ├── __init__.py
-│   └── exa_tools.py            # web_search_exa, web_fetch_exa, exa_find_similar
+│   └── exa_tools.py            # web_search_exa, web_fetch_exa
 ├── _conf_schema.json           # AstrBot 控制台配置 UI 定义
 ├── main.py                     # 插件核心逻辑 (指令注册和初始化)
 ├── metadata.yaml               # 插件元信息

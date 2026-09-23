@@ -34,7 +34,7 @@ _MIN_TIMEOUT = 30
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503})
 
 # Base URL 禁止的端点路径后缀
-_DISALLOWED_PATH_SUFFIXES = frozenset({"search", "contents", "findsimilar", "answer"})
+_DISALLOWED_PATH_SUFFIXES = frozenset({"search", "contents", "answer"})
 
 
 # API Key 轮询器
@@ -165,16 +165,11 @@ class ExaWebSearchPlugin(Star):
         self._base_url: str = "https://api.exa.ai"
 
         # 注册 LLM 函数工具
-        from .tools.exa_tools import (
-            ExaFindSimilarTool,
-            ExaWebFetchTool,
-            ExaWebSearchTool,
-        )
+        from .tools.exa_tools import ExaWebFetchTool, ExaWebSearchTool
 
         self.context.add_llm_tools(
             ExaWebSearchTool(plugin=self),
             ExaWebFetchTool(plugin=self),
-            ExaFindSimilarTool(plugin=self),
         )
 
     async def initialize(self):
@@ -395,23 +390,6 @@ class ExaWebSearchPlugin(Star):
 
         return data.get("results", [])
 
-    async def _exa_find_similar(
-        self,
-        url: str,
-        *,
-        num_results: int = 10,
-        timeout: int | None = None,
-    ) -> list[dict]:
-        """调用 Exa findSimilar 端点（该端点已被 Exa 标记为 deprecated）。"""
-        payload = {
-            "url": url,
-            "numResults": num_results,
-            "contents": {"text": {"maxCharacters": 500}},
-        }
-
-        data = await self._exa_request("/findSimilar", payload, timeout=timeout)
-        return data.get("results", [])
-
     async def _search_with_retry(
         self,
         query: str,
@@ -566,7 +544,6 @@ class ExaWebSearchPlugin(Star):
             "  - /exa 指令：直接搜索并返回结果\n"
             "  - LLM Tool：模型自动调用 web_search_exa\n"
             "  - LLM Tool：模型自动调用 web_fetch_exa\n"
-            "  - LLM Tool：模型自动调用 exa_find_similar\n"
             "\n"
             f"当前配置:\n"
             f"  API Key: {key_status}\n"

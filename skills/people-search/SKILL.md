@@ -9,7 +9,6 @@ description: 使用 Exa 搜索查找人物信息。查找 LinkedIn 档案、专�
 
 - `web_search_exa` — 语义搜索人物信息（使用 `category="people"`）
 - `web_fetch_exa` — 提取档案/简介页面的完整内容
-- `exa_find_similar` — 从已知人物页面发现相似专家
 
 ## 分类选择
 
@@ -51,11 +50,6 @@ web_search_exa(query="Dario Amodei Anthropic CEO background", max_results=15)
 ### 新闻报道
 ```
 web_search_exa(query="Dario Amodei interview 2024", category="news", max_results=10)
-```
-
-### 发现相似专家
-```
-exa_find_similar(url="https://linkedin.com/in/example-expert", max_results=20)
 ```
 
 ## 输出格式

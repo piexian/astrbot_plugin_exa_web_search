@@ -9,7 +9,6 @@ description: 使用 Exa 搜索进行企业调研。查找公司信息、竞品�
 
 - `web_search_exa` — 语义搜索（支持 category 垂直分类）
 - `web_fetch_exa` — 提取网页完整内容（深入了解某公司详情）
-- `exa_find_similar` — 发现相似公司网站
 
 ## 搜索策略
 
@@ -53,11 +52,6 @@ web_search_exa(query="Anthropic funding rounds valuation 2024", max_results=10)
 ### 查找新闻报道
 ```
 web_search_exa(query="Anthropic AI safety", category="news", max_results=15)
-```
-
-### 发现竞品
-```
-exa_find_similar(url="https://example.com", max_results=20)
 ```
 
 ## 输出格式
