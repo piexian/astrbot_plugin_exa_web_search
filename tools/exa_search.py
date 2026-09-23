@@ -55,16 +55,14 @@ def validate_search_filters(
     end_published_date: str = "",
 ) -> None:
     """Reject search filters unsupported by Exa vertical categories."""
-    if category not in {"company", "people"}:
-        return
-
     unsupported = []
-    if exclude_domains:
+    if category == "people" and exclude_domains:
         unsupported.append("excludeDomains")
-    if start_published_date:
-        unsupported.append("startPublishedDate")
-    if end_published_date:
-        unsupported.append("endPublishedDate")
+    if category in {"company", "people"}:
+        if start_published_date:
+            unsupported.append("startPublishedDate")
+        if end_published_date:
+            unsupported.append("endPublishedDate")
     if unsupported:
         names = ", ".join(unsupported)
         raise ValueError(f'Exa category "{category}" 不支持参数: {names}')

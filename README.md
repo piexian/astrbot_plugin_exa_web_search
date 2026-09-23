@@ -76,7 +76,7 @@ LLM Tool `exa-search` 支持以下分类：
 
 `company` / `people` / `publication` / `news` / `personal site` / `financial report`
 
-`company` 和 `people` 不支持 `excludeDomains`、`startPublishedDate` 或 `endPublishedDate`。
+`people` 不支持 `excludeDomains`、`startPublishedDate` 或 `endPublishedDate`；`company` 不支持后两个日期过滤参数。
 
 ## EXA额度
 

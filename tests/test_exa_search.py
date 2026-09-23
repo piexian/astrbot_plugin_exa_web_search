@@ -59,10 +59,9 @@ class ExaSearchContractTests(unittest.TestCase):
         self.assertEqual(payload["category"], "publication")
         self.assertEqual(payload["includeDomains"], ["arxiv.org", "example.com"])
 
-    def test_vertical_filters_are_rejected_before_request(self):
+    def test_vertical_date_filters_are_rejected_before_request(self):
         for category in ("company", "people"):
             for field, value in (
-                ("exclude_domains", "example.com"),
                 ("start_published_date", "2026-01-01T00:00:00Z"),
                 ("end_published_date", "2026-12-31T00:00:00Z"),
             ):
@@ -71,6 +70,18 @@ class ExaSearchContractTests(unittest.TestCase):
                         build_search_payload(
                             "query", category=category, **{field: value}
                         )
+
+    def test_people_exclude_domains_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "excludeDomains"):
+            build_search_payload(
+                "query", category="people", exclude_domains="example.com"
+            )
+
+    def test_company_exclude_domains_are_preserved(self):
+        payload = build_search_payload(
+            "query", category="company", exclude_domains="example.com"
+        )
+        self.assertEqual(payload["excludeDomains"], ["example.com"])
 
     def test_supported_vertical_filter_is_preserved(self):
         payload = build_search_payload(
