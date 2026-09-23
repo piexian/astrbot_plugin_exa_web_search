@@ -5,6 +5,7 @@
 ## 功能特性
 
 - **语义搜索** — 基于 Exa 的搜索引擎，默认使用推荐的 `auto` 搜索类型
+- **代码上下文** — 使用 Exa Code 获取真实代码示例和实现上下文
 - **网页内容提取** — 提取指定 URL 的完整文本内容
 - **多 API Key 轮询** — 支持配置多个 Key 进行轮询
 - **指令 + LLM Tool** — 既可 `/exa` 手动搜索，也可由 AI 自动调用
@@ -50,8 +51,9 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 
 ### LLM Tool 自动调用
 
-插件注册了 2 个 LLM Tool，大模型会在需要时自动调用：
+插件注册了 3 个 LLM Tool，大模型会在需要时自动调用：
 
+- **`exa-code-context`** — 获取代码示例和实现上下文
 - **`exa-search`** — 语义搜索（支持搜索类型和垂直分类）
 - **`web_fetch_exa`** — 提取网页完整内容
 
@@ -93,7 +95,7 @@ EXA50BUILDCLUB
 ```
 astrbot_plugin_exa_web_search/
 ├── .github/workflows/ci.yml   # CI：单元测试 + ruff lint/format + 语法检查 + 元数据校验
-├── tests/                     # 搜索契约单元测试
+├── tests/                     # 搜索与代码上下文单元测试
 ├── skills/                     # LLM 搜索技能指引（自动加载）
 │   ├── company-research/SKILL.md       # 企业调研
 │   ├── lead-generation/SKILL.md        # 线索生成
@@ -104,8 +106,9 @@ astrbot_plugin_exa_web_search/
 │   └── personal-site-search/SKILL.md   # 个人站点搜索
 ├── tools/                      # Class-based LLM 工具定义
 │   ├── __init__.py
+│   ├── exa_context.py          # Exa Code Context 参数校验
 │   ├── exa_search.py           # 搜索参数规范化与校验
-│   └── exa_tools.py            # exa-search, web_fetch_exa
+│   └── exa_tools.py            # exa-search, exa-code-context, web_fetch_exa
 ├── _conf_schema.json           # AstrBot 控制台配置 UI 定义
 ├── main.py                     # 插件核心逻辑 (指令注册和初始化)
 ├── metadata.yaml               # 插件元信息
