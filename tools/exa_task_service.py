@@ -1,0 +1,515 @@
+"""Lifecycle orchestration for archived Exa Agent tasks."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import hmac
+import logging
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from .exa_agent import (
+    ExaAgentAPIError,
+    ExaAgentClient,
+    RemoteAgentRun,
+    normalize_remote_run,
+    redact_secret,
+    sources_from_events,
+)
+from .exa_files import cleanup_exports, write_task_markdown
+from .exa_tasks import (
+    ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
+    CapacityStatus,
+    CleanupPreview,
+    CleanupResult,
+    TaskArchive,
+    TaskNotFoundError,
+    TaskRecord,
+    utc_now_iso,
+)
+
+LOGGER = logging.getLogger(__name__)
+_MAX_RECONCILE_PAGES = 100
+
+
+class KeySlotMismatchError(RuntimeError):
+    """Raised when a task's bound API key is no longer at its slot."""
+
+
+def key_fingerprint(api_key: str) -> str:
+    return hashlib.sha256(str(api_key).encode("utf-8")).hexdigest()
+
+@dataclass(slots=True, frozen=True)
+class TaskCreationOutcome:
+    task: TaskRecord
+    warning: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class TaskStatsResult:
+    task: TaskRecord
+    remote_error: str = ""
+
+
+class AgentTaskService:
+    """Own Agent polling, recovery, cancellation, and archive maintenance."""
+
+    def __init__(
+        self,
+        *,
+        archive: TaskArchive,
+        client: ExaAgentClient,
+        api_keys: list[str],
+        data_dir: str | Path,
+        max_concurrency: int = 2,
+        poll_interval_seconds: float = 5,
+        status_retry_limit: int = 5,
+        effort: str = "auto",
+        budget_max_dollars: float | None = 5.0,
+        archive_event_pages: int = 10,
+    ) -> None:
+        if not api_keys:
+            raise ValueError("至少配置一个 Exa API Key 才能使用 Agent 任务。")
+        if int(max_concurrency) < 1:
+            raise ValueError("agent_max_concurrent 必须大于 0。")
+        if float(poll_interval_seconds) <= 0:
+            raise ValueError("agent_poll_interval_seconds 必须大于 0。")
+        self.archive = archive
+        self.client = client
+        self._api_keys = tuple(str(key) for key in api_keys if str(key).strip())
+        if not self._api_keys:
+            raise ValueError("至少配置一个有效的 Exa API Key 才能使用 Agent 任务。")
+        self.data_dir = Path(data_dir)
+        self.max_concurrency = int(max_concurrency)
+        self.poll_interval_seconds = float(poll_interval_seconds)
+        self.status_retry_limit = max(1, int(status_retry_limit))
+        self.effort = effort
+        self.budget_max_dollars = budget_max_dollars
+        self.archive_event_pages = max(1, int(archive_event_pages))
+        self._key_index = 0
+        self._key_lock = asyncio.Lock()
+        self._monitors: dict[str, asyncio.Task[None]] = {}
+        self._stopping = False
+        self._started = False
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        await self.archive.initialize()
+        await self.ensure_capacity()
+        await asyncio.to_thread(cleanup_exports, self.data_dir)
+        self._started = True
+        for task in await self.archive.list_active_tasks():
+            if task.run_id:
+                self._schedule_monitor(task.task_id)
+            else:
+                self._schedule_reconciliation(task.task_id)
+
+    async def shutdown(self) -> None:
+        self._stopping = True
+        tasks = list(self._monitors.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._monitors.clear()
+
+    async def create_task(self, query: str) -> TaskCreationOutcome:
+        text = str(query or "").strip()
+        if not text:
+            raise ValueError("Agent 研究问题不能为空。")
+        if not self._started:
+            raise RuntimeError("Agent 任务服务尚未初始化。")
+        await self.ensure_capacity()
+        key_slot = await self._next_key_slot()
+        api_key = self._key_for_slot(key_slot)
+        task = await self.archive.reserve_task(
+            text,
+            key_slot,
+            self.max_concurrency,
+            key_fingerprint=key_fingerprint(api_key),
+        )
+        try:
+            remote = await self.client.create_run(
+                text,
+                api_key,
+                effort=self.effort,
+                budget_max_dollars=self.budget_max_dollars,
+                metadata={"task_id": task.task_id},
+            )
+        except ExaAgentAPIError as exc:
+            error = redact_secret(str(exc), api_key)
+            if exc.outcome_uncertain:
+                task = await self.archive.update_task(
+                    task.task_id,
+                    status="queued",
+                    error=f"创建结果未知，正在核对：{error}",
+                )
+                self._schedule_reconciliation(task.task_id)
+                warning = (
+                    "远端创建结果暂时未知，已保留本地任务并持续核对；"
+                    "插件不会自动重建任务。"
+                )
+            else:
+                task = await self.archive.update_task(
+                    task.task_id,
+                    status="failed",
+                    error=error,
+                    completed_at=utc_now_iso(),
+                )
+                warning = "任务创建失败，已写入本地归档。"
+            await self.ensure_capacity()
+            return TaskCreationOutcome(task, warning)
+        task = await self._apply_remote_run(task.task_id, remote, api_key)
+        if task.is_active:
+            self._schedule_monitor(task.task_id)
+        await self.ensure_capacity()
+        return TaskCreationOutcome(task)
+
+    async def search_tasks(self, term: str = "") -> list[TaskRecord]:
+        await self.ensure_capacity()
+        tasks = await self.archive.search_tasks(term)
+        capacity = await self.ensure_capacity()
+        if capacity.percent >= 100:
+            tasks = await self.archive.search_tasks(term)
+        return tasks
+
+    async def get_task(self, task_id: str) -> TaskStatsResult:
+        await self.archive.capacity_status()
+        task = await self.archive.resolve_task(task_id)
+        remote_error = ""
+        if task.is_active:
+            try:
+                task = await self._refresh_active_task(task)
+            except TaskNotFoundError:
+                raise
+            except Exception as exc:
+                remote_error = str(exc)
+        await self.ensure_capacity()
+        return TaskStatsResult(task, remote_error)
+
+    async def cancel_task(self, task_id: str) -> TaskRecord:
+        task = await self.archive.resolve_task(task_id)
+        if not task.is_active:
+            return task
+        if not task.run_id:
+            task = await self._reconcile_once(task)
+        if not task.is_active:
+            return task
+        if not task.run_id:
+            raise RuntimeError("远端 Run 尚未确认，无法取消。")
+        api_key = self._key_for_task(task)
+        try:
+            remote = await self.client.cancel_run(task.run_id, api_key)
+        except ExaAgentAPIError as exc:
+            error = redact_secret(str(exc), api_key)
+            if exc.status == 404:
+                return await self.archive.update_task(
+                    task.task_id,
+                    status="interrupted",
+                    error="远端任务不存在或已过期。",
+                    completed_at=utc_now_iso(),
+                )
+            if exc.outcome_uncertain:
+                return await self.archive.update_task(task.task_id, error=error)
+            raise
+        return await self._apply_remote_run(task.task_id, remote, api_key)
+
+    async def delete_task(self, task_id: str) -> TaskRecord:
+        task = await self.archive.resolve_task(task_id)
+        deleted = await self.archive.delete_task(task.task_id)
+        await self.ensure_capacity()
+        self._log_cleanup(self.archive.last_cleanup)
+        return deleted
+
+    async def preview_cleanup(self) -> CleanupPreview:
+        return await self.archive.preview_cleanup(automatic=False)
+
+    async def delete_all_terminal(self) -> CleanupResult:
+        result = await self.archive.cleanup_terminal(automatic=False)
+        self._log_cleanup(result)
+        return result
+
+    async def get_export_task(self, task_id: str) -> tuple[TaskRecord, Path]:
+        task = await self.archive.resolve_task(task_id)
+        if task.status not in {"completed", "failed"}:
+            raise ValueError("stats -q 仅允许导出 completed 或 failed 任务。")
+        path = await asyncio.to_thread(write_task_markdown, self.data_dir, task)
+        return task, path
+
+    async def capacity_status(self) -> CapacityStatus:
+        return await self.ensure_capacity()
+
+    async def last_cleanup(self) -> CleanupResult | None:
+        return self.archive.last_cleanup
+
+    async def ensure_capacity(self) -> CapacityStatus:
+        for attempt in range(3):
+            capacity = await self.archive.capacity_status()
+            if capacity.percent < 100:
+                return capacity
+            try:
+                result = await self.archive.cleanup_terminal(automatic=True)
+            except sqlite3.OperationalError as exc:
+                LOGGER.warning(
+                    "自动清理任务归档失败，将重试: %s", exc
+                )
+                await asyncio.sleep(0.05)
+                continue
+            self._log_cleanup(result)
+        return await self.archive.capacity_status()
+
+    @staticmethod
+    def _log_cleanup(result: CleanupResult | None) -> None:
+        if result is None or not result.deleted_task_ids:
+            return
+        LOGGER.info(
+            "Exa Agent 归档清理: tasks=%s freed=%s remaining=%s",
+            ",".join(result.deleted_task_ids),
+            result.freed_bytes,
+            result.remaining_bytes,
+        )
+
+    async def _next_key_slot(self) -> int:
+        async with self._key_lock:
+            slot = self._key_index
+            self._key_index = (self._key_index + 1) % len(self._api_keys)
+            return slot
+
+    def _key_for_slot(self, slot: int) -> str:
+        if slot < 0 or slot >= len(self._api_keys):
+            raise ValueError(f"任务使用的 Key 槽位 {slot} 已失效。")
+        return self._api_keys[slot]
+
+
+    def _key_for_task(self, task: TaskRecord) -> str:
+        api_key = self._key_for_slot(task.key_slot)
+        if task.key_fingerprint and not hmac.compare_digest(
+            task.key_fingerprint, key_fingerprint(api_key)
+        ):
+            raise KeySlotMismatchError(
+                f"任务 {task.task_id} 的 API Key 槽位已变化；请恢复原 Key 后重启插件。"
+            )
+        return api_key
+    def _schedule_monitor(self, task_id: str) -> None:
+        if self._stopping:
+            return
+        existing = self._monitors.get(task_id)
+        current = asyncio.current_task()
+        if (
+            existing
+            and not existing.done()
+            and existing is not current
+        ):
+            return
+        task = asyncio.create_task(
+            self._monitor_task(task_id), name=f"exa-agent-monitor-{task_id}"
+        )
+        self._monitors[task_id] = task
+        task.add_done_callback(lambda done, tid=task_id: self._monitor_done(tid, done))
+
+    def _schedule_reconciliation(self, task_id: str) -> None:
+        if self._stopping:
+            return
+        existing = self._monitors.get(task_id)
+        if existing and not existing.done():
+            return
+        task = asyncio.create_task(
+            self._reconcile_missing_run(task_id),
+            name=f"exa-agent-reconcile-{task_id}",
+        )
+        self._monitors[task_id] = task
+        task.add_done_callback(lambda done, tid=task_id: self._monitor_done(tid, done))
+
+    def _monitor_done(self, task_id: str, task: asyncio.Task[None]) -> None:
+        if self._monitors.get(task_id) is task:
+            self._monitors.pop(task_id, None)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            return
+        if error:
+            LOGGER.error("Exa Agent 后台任务 %s 异常: %s", task_id, error)
+
+    async def _monitor_task(self, task_id: str) -> None:
+        not_found_count = 0
+        failure_count = 0
+        while not self._stopping:
+            try:
+                task = await self.archive.get_task(task_id)
+            except TaskNotFoundError:
+                return
+            if task.status not in ACTIVE_STATUSES:
+                return
+            if not task.run_id:
+                updated = await self._reconcile_once(task)
+                if updated.is_active:
+                    return
+                continue
+            try:
+                api_key = self._key_for_task(task)
+            except (KeySlotMismatchError, ValueError) as exc:
+                LOGGER.error("Exa Agent 任务 %s 暂停轮询: %s", task.task_id, exc)
+                return
+            try:
+                remote = await self.client.get_run(task.run_id, api_key)
+            except ExaAgentAPIError as exc:
+                if exc.status == 404:
+                    not_found_count += 1
+                    if not_found_count >= 3:
+                        await self.archive.update_task(
+                            task.task_id,
+                            status="interrupted",
+                            error="远端任务不存在或已过期。",
+                            completed_at=utc_now_iso(),
+                        )
+                        return
+                else:
+                    failure_count += 1
+                    if failure_count % self.status_retry_limit == 1:
+                        LOGGER.warning(
+                            "查询 Exa Agent 任务 %s 失败，将继续重试: %s",
+                            task.task_id,
+                            redact_secret(str(exc), api_key),
+                        )
+                await asyncio.sleep(self.poll_interval_seconds)
+                continue
+            not_found_count = 0
+            failure_count = 0
+            task = await self._apply_remote_run(task.task_id, remote, api_key)
+            if not task.is_active:
+                return
+            await self._sleep_or_stop(self.poll_interval_seconds)
+
+    async def _reconcile_missing_run(self, task_id: str) -> None:
+        while not self._stopping:
+            try:
+                task = await self.archive.get_task(task_id)
+            except TaskNotFoundError:
+                return
+            if task.status not in ACTIVE_STATUSES or task.run_id:
+                if task.run_id:
+                    self._schedule_monitor(task.task_id)
+                return
+            try:
+                await self._reconcile_once(task)
+                return
+            except KeySlotMismatchError as exc:
+                LOGGER.error("核对 Exa Agent 任务 %s 暂停: %s", task.task_id, exc)
+                return
+            except Exception as exc:
+                LOGGER.warning(
+                    "核对 Exa Agent 任务 %s 失败，将继续重试: %s",
+                    task.task_id,
+                    exc,
+                )
+            await self._sleep_or_stop(max(self.poll_interval_seconds, 10))
+
+    async def _reconcile_once(self, task: TaskRecord) -> TaskRecord:
+        api_key = self._key_for_task(task)
+        cursor: str | None = None
+        for _ in range(_MAX_RECONCILE_PAGES):
+            page = await self.client.list_runs(api_key, cursor=cursor, limit=100)
+            runs = page.get("data") if isinstance(page, dict) else []
+            if isinstance(runs, list):
+                for raw_run in runs:
+                    if not isinstance(raw_run, dict):
+                        continue
+                    if self._remote_task_id(raw_run) != task.task_id:
+                        continue
+                    remote = normalize_remote_run(raw_run)
+                    updated = await self._apply_remote_run(
+                        task.task_id, remote, api_key
+                    )
+                    if updated.is_active:
+                        self._schedule_monitor(task.task_id)
+                    return updated
+            next_cursor = page.get("nextCursor") if isinstance(page, dict) else None
+            if not page.get("hasMore") or not next_cursor or next_cursor == cursor:
+                break
+            cursor = str(next_cursor)
+        updated = await self.archive.update_task(
+            task.task_id,
+            status="interrupted",
+            error="未找到对应的远端 Agent Run；为避免重复扣费不会自动重建。",
+            completed_at=utc_now_iso(),
+        )
+        return updated
+
+    async def _refresh_active_task(self, task: TaskRecord) -> TaskRecord:
+        if not task.run_id:
+            return await self._reconcile_once(task)
+        api_key = self._key_for_task(task)
+        try:
+            remote = await self.client.get_run(task.run_id, api_key)
+        except ExaAgentAPIError as exc:
+            if exc.status == 404:
+                return await self.archive.update_task(
+                    task.task_id,
+                    status="interrupted",
+                    error="远端任务不存在或已过期。",
+                    completed_at=utc_now_iso(),
+                )
+            raise
+        return await self._apply_remote_run(task.task_id, remote, api_key)
+
+    async def _apply_remote_run(
+        self, task_id: str, remote: RemoteAgentRun, api_key: str
+    ) -> TaskRecord:
+        current = await self.archive.get_task(task_id)
+        if current.status in TERMINAL_STATUSES:
+            return current
+        sources = list(remote.sources)
+        if remote.is_terminal and not sources:
+            try:
+                events = await self.client.list_all_events(
+                    remote.run_id,
+                    api_key,
+                    max_pages=self.archive_event_pages,
+                )
+                sources = sources_from_events(events)
+            except ExaAgentAPIError as exc:
+                LOGGER.debug(
+                    "读取 Exa Agent 事件失败 %s: %s",
+                    remote.run_id,
+                    redact_secret(str(exc), api_key),
+                )
+        update: dict[str, Any] = {
+            "status": remote.status,
+            "run_id": remote.run_id,
+            "result": remote.result,
+            "sources": sources,
+            "cost": remote.cost,
+            "error": redact_secret(remote.error, api_key),
+            "completed_at": (
+                remote.completed_at
+                or (utc_now_iso() if remote.is_terminal else None)
+            ),
+        }
+        if remote.request_id:
+            update["request_id"] = remote.request_id
+        return await self.archive.update_task(task_id, **update)
+
+    async def _sleep_or_stop(self, seconds: float) -> None:
+        if self._stopping:
+            return
+        try:
+            await asyncio.wait_for(asyncio.sleep(seconds), timeout=seconds)
+        except asyncio.TimeoutError:
+            return
+
+    @staticmethod
+    def _remote_task_id(data: dict[str, Any]) -> str:
+        request = data.get("request")
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict) and isinstance(request, dict):
+            metadata = request.get("metadata")
+        if not isinstance(metadata, dict):
+            return ""
+        return str(metadata.get("task_id") or "")
