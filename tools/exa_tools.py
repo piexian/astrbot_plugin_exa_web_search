@@ -42,6 +42,10 @@ class ExaSearchTool(FunctionTool):
                     ),
                     "enum": sorted(SEARCH_CATEGORIES),
                 },
+                "user_location": {
+                    "type": "string",
+                    "description": "Optional. Two-letter ISO user location, such as US.",
+                },
                 "include_domains": {
                     "type": "string",
                     "description": (
@@ -77,6 +81,7 @@ class ExaSearchTool(FunctionTool):
         max_results: int = 0,
         search_type: str = "",
         category: str = "",
+        user_location: str = "",
         include_domains: str = "",
         exclude_domains: str = "",
         start_published_date: str = "",
@@ -108,6 +113,7 @@ class ExaSearchTool(FunctionTool):
                 num_results=num,
                 search_type=normalize_search_type(search_type),
                 category=str(category).strip(),
+                user_location=str(user_location).strip(),
                 include_domains=include_domains,
                 exclude_domains=exclude_domains,
                 start_published_date=str(start_published_date).strip(),
@@ -203,6 +209,12 @@ class ExaWebFetchTool(FunctionTool):
                         " Default is 3000."
                     ),
                 },
+                "max_age_hours": {
+                    "type": "integer",
+                    "minimum": -1,
+                    "maximum": 720,
+                    "description": "Optional. Content freshness in hours; 0 always fetches fresh content.",
+                },
             },
             "required": ["url"],
         }
@@ -213,6 +225,7 @@ class ExaWebFetchTool(FunctionTool):
         event: AstrMessageEvent,
         url: str,
         max_characters: int = 0,
+        max_age_hours: int | None = None,
     ) -> str:
         from ..main import PLUGIN_NAME, ExaAPIError, _normalize_count
 
@@ -235,7 +248,11 @@ class ExaWebFetchTool(FunctionTool):
                 minimum=1,
                 maximum=100000,
             )
-            results = await plugin._exa_extract(url, max_characters=max_chars)
+            results = await plugin._exa_extract(
+                url,
+                max_characters=max_chars,
+                max_age_hours=max_age_hours,
+            )
             return json.dumps(results, ensure_ascii=False)
 
         except ExaAPIError as e:

@@ -46,6 +46,12 @@
     ],
     "default": "auto"
   },
+  "moderation": {
+    "type": "bool",
+    "description": "启用 Exa 内容审核",
+    "hint": "开启后由 Exa 过滤不安全内容；默认关闭",
+    "default": false
+  },
   "show_sources": {
     "type": "bool",
     "description": "是否在结果中显示来源 URL",
