@@ -1,8 +1,10 @@
+import json
 import unittest
 
 from tools.exa_context import (
     MAX_CONTEXT_QUERY_LENGTH,
     build_context_payload,
+    format_context_result,
     normalize_tokens_num,
 )
 
@@ -42,6 +44,32 @@ class ExaContextContractTests(unittest.TestCase):
             payload,
             {"query": "React hooks state management", "tokensNum": "dynamic"},
         )
+
+    def test_context_response_is_formatted_for_llm(self):
+        formatted = format_context_result(
+            {
+                "requestId": "req-1",
+                "query": "asyncio timeout",
+                "response": "```python\\npass\\n```",
+                "resultsCount": 3,
+                "outputTokens": 100,
+            },
+            "fallback query",
+        )
+        self.assertEqual(
+            json.loads(formatted),
+            {
+                "requestId": "req-1",
+                "query": "asyncio timeout",
+                "response": "```python\\npass\\n```",
+                "resultsCount": 3,
+                "outputTokens": 100,
+            },
+        )
+
+    def test_empty_context_response_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "返回为空"):
+            format_context_result({"response": ""}, "query")
 
 
 if __name__ == "__main__":

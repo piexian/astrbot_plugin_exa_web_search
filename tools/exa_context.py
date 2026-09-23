@@ -1,3 +1,5 @@
+import json
+
 MIN_CONTEXT_TOKENS = 50
 MAX_CONTEXT_TOKENS = 100000
 MAX_CONTEXT_QUERY_LENGTH = 2000
@@ -38,3 +40,20 @@ def build_context_payload(query: str, *, tokens_num: str | int = "dynamic") -> d
         "query": normalized_query,
         "tokensNum": normalize_tokens_num(tokens_num),
     }
+
+
+def format_context_result(data: dict, fallback_query: str) -> str:
+    """Format a Context API response for an LLM tool result."""
+    response = data.get("response")
+    if not isinstance(response, str) or not response:
+        raise ValueError("Exa Code Context 返回为空")
+    return json.dumps(
+        {
+            "requestId": data.get("requestId", ""),
+            "query": data.get("query", fallback_query),
+            "response": response,
+            "resultsCount": data.get("resultsCount"),
+            "outputTokens": data.get("outputTokens"),
+        },
+        ensure_ascii=False,
+    )

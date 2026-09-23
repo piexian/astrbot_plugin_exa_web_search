@@ -5,6 +5,7 @@ from typing import Any
 from astrbot.api import FunctionTool
 from astrbot.api.event import AstrMessageEvent
 
+from .exa_context import format_context_result
 from .exa_search import SEARCH_CATEGORIES, SEARCH_TYPES, normalize_search_type
 
 
@@ -170,19 +171,7 @@ class ExaCodeContextTool(FunctionTool):
 
         try:
             data = await plugin._exa_code_context(query, tokens_num=tokens_num)
-            response = data.get("response")
-            if not isinstance(response, str) or not response:
-                raise ValueError("Exa Code Context 返回为空")
-            return json.dumps(
-                {
-                    "requestId": data.get("requestId", ""),
-                    "query": data.get("query", query),
-                    "response": response,
-                    "resultsCount": data.get("resultsCount"),
-                    "outputTokens": data.get("outputTokens"),
-                },
-                ensure_ascii=False,
-            )
+            return format_context_result(data, query)
         except ExaAPIError as e:
             return f"Error: Exa Code Context failed: {e}"
         except ValueError as e:

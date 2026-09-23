@@ -10,6 +10,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 
 from .tools.exa_context import build_context_payload
+from .tools.exa_response import normalize_cost_total
 from .tools.exa_search import (
     MIN_TIMEOUT_SECONDS,
     build_search_payload,
@@ -243,12 +244,7 @@ class ExaWebSearchPlugin(Star):
                     data = await resp.json()
                     # 记录费用信息
                     cost = data.get("costDollars", {})
-                    if isinstance(cost, dict):
-                        total = cost.get("total", "N/A")
-                    elif cost:
-                        total = cost
-                    else:
-                        total = "N/A"
+                    total = normalize_cost_total(cost)
                     logger.debug(f"[{PLUGIN_NAME}] {endpoint} 费用: ${total}")
                     return data
 
