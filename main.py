@@ -9,6 +9,8 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 
+from .tools.exa_context import build_context_payload
+from .tools.exa_response import normalize_cost_total
 from .tools.exa_search import (
     MIN_TIMEOUT_SECONDS,
     build_search_payload,
@@ -22,7 +24,7 @@ PLUGIN_NAME = "astrbot_plugin_exa_web_search"
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503})
 
 # Base URL 禁止的端点路径后缀
-_DISALLOWED_PATH_SUFFIXES = frozenset({"search", "contents", "answer"})
+_DISALLOWED_PATH_SUFFIXES = frozenset({"search", "contents", "answer", "context"})
 
 
 # API Key 轮询器
@@ -87,7 +89,7 @@ def _normalize_base_url(base_url: str) -> str:
     if last_segment and last_segment in _DISALLOWED_PATH_SUFFIXES:
         raise ValueError(
             f"Exa API Base URL 应为基础地址，不应包含具体端点路径 "
-            f"（如 /search、/contents），当前值: {normalized!r}"
+            f"（如 /search、/contents、/context），当前值: {normalized!r}"
         )
     return normalized
 
@@ -142,10 +144,15 @@ class ExaWebSearchPlugin(Star):
         self._base_url: str = "https://api.exa.ai"
 
         # 注册 LLM 函数工具
-        from .tools.exa_tools import ExaSearchTool, ExaWebFetchTool
+        from .tools.exa_tools import (
+            ExaCodeContextTool,
+            ExaSearchTool,
+            ExaWebFetchTool,
+        )
 
         self.context.add_llm_tools(
             ExaSearchTool(plugin=self),
+            ExaCodeContextTool(plugin=self),
             ExaWebFetchTool(plugin=self),
         )
 
@@ -237,9 +244,8 @@ class ExaWebSearchPlugin(Star):
                     data = await resp.json()
                     # 记录费用信息
                     cost = data.get("costDollars", {})
-                    if cost:
-                        total = cost.get("total", "N/A")
-                        logger.debug(f"[{PLUGIN_NAME}] {endpoint} 费用: ${total}")
+                    total = normalize_cost_total(cost)
+                    logger.debug(f"[{PLUGIN_NAME}] {endpoint} 费用: ${total}")
                     return data
 
                 # 错误处理
@@ -323,6 +329,19 @@ class ExaWebSearchPlugin(Star):
         request_timeout = resolve_timeout_seconds(timeout, payload["type"])
         data = await self._exa_request("/search", payload, timeout=request_timeout)
         return data.get("results", [])
+
+    async def _exa_code_context(
+        self,
+        query: str,
+        *,
+        tokens_num: str | int = "dynamic",
+        timeout: int | None = None,
+    ) -> dict:
+        """调用 Exa Code Context 端点获取代码上下文。"""
+        payload = build_context_payload(query, tokens_num=tokens_num)
+        if timeout is None:
+            timeout = self.config.get("timeout_seconds", MIN_TIMEOUT_SECONDS)
+        return await self._exa_request("/context", payload, timeout=timeout)
 
     async def _exa_extract(
         self,
@@ -504,6 +523,7 @@ class ExaWebSearchPlugin(Star):
             "调用方式:\n"
             "  - /exa 指令：直接搜索并返回结果\n"
             "  - LLM Tool：模型自动调用 exa-search\n"
+            "  - LLM Tool：模型自动调用 exa-code-context\n"
             "  - LLM Tool：模型自动调用 web_fetch_exa\n"
             "\n"
             f"当前配置:\n"

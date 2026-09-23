@@ -1,13 +1,14 @@
 ---
 name: code-search
-description: 使用 Exa 搜索代码示例和技术文档。从 GitHub、StackOverflow 和技术文档中查找真实代码片段。适用于搜索代码示例、API 语法、库文档或调试帮助。
+description: 使用 Exa Code 和 Exa 搜索代码示例与技术文档。从 GitHub、StackOverflow 和技术文档中查找真实代码片段。适用于搜索代码示例、API 语法、库文档或调试帮助。
 ---
 
 # 代码搜索 (Code Search)
 
 ## 可用工具
 
-- `exa-search` — 语义搜索代码相关内容
+- `exa-code-context` — 获取面向代码的上下文和可复制示例
+- `exa-search` — 通用技术资料和网页搜索
 - `web_fetch_exa` — 提取文档/代码页面的完整内容
 
 ## 适用场景
@@ -29,13 +30,15 @@ description: 使用 Exa 搜索代码示例和技术文档。从 GitHub、StackOv
 
 ### 快速查找
 ```
-exa-search(query="Python asyncio gather timeout example", max_results=5)
+exa-code-context(query="Python asyncio gather timeout example", tokens_num="dynamic")
 ```
 
 ### 复杂问题搜索
 ```
-exa-search(query="Next.js 14 server actions authentication pattern", max_results=10)
+exa-code-context(query="Next.js 14 server actions authentication pattern", tokens_num=5000)
 ```
+
+需要搜索版本发布、新闻或更广泛的网页资料时，使用 `exa-search`；需要读取已知页面全文时使用 `web_fetch_exa`。
 
 ### 提取完整文档
 搜索到目标后，用 `web_fetch_exa` 获取完整内容：

@@ -5,6 +5,7 @@ from typing import Any
 from astrbot.api import FunctionTool
 from astrbot.api.event import AstrMessageEvent
 
+from .exa_context import format_context_result
 from .exa_search import SEARCH_CATEGORIES, SEARCH_TYPES, normalize_search_type
 
 
@@ -123,6 +124,63 @@ class ExaSearchTool(FunctionTool):
 
             logger.error(f"[{PLUGIN_NAME}] exa-search exception: {e}")
             return f"Error: Exa search exception: {e}"
+
+
+@dataclass
+class ExaCodeContextTool(FunctionTool):
+    plugin: Any = None
+    name: str = "exa-code-context"
+    description: str = (
+        "Find token-efficient code examples and implementation context using Exa Code."
+    )
+    parameters: dict = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Required. Code implementation or technical documentation query.",
+                },
+                "tokens_num": {
+                    "description": (
+                        "Optional. Use dynamic or an integer from 50 to 100000."
+                    ),
+                    "oneOf": [
+                        {"type": "string", "enum": ["dynamic"]},
+                        {"type": "integer", "minimum": 50, "maximum": 100000},
+                    ],
+                },
+            },
+            "required": ["query"],
+        }
+    )
+
+    async def run(
+        self,
+        event: AstrMessageEvent,
+        query: str,
+        tokens_num: str | int = "dynamic",
+    ) -> str:
+        from ..main import PLUGIN_NAME, ExaAPIError
+
+        plugin = self.plugin
+        if plugin is None:
+            return "Error: Plugin instance not initialized in tool."
+        if not plugin.config.get("exa_api_keys", []):
+            return "Error: Exa API key is not configured."
+
+        try:
+            data = await plugin._exa_code_context(query, tokens_num=tokens_num)
+            return format_context_result(data, query)
+        except ExaAPIError as e:
+            return f"Error: Exa Code Context failed: {e}"
+        except ValueError as e:
+            return f"Error: {e}"
+        except Exception as e:
+            from astrbot.api import logger
+
+            logger.error(f"[{PLUGIN_NAME}] exa-code-context exception: {e}")
+            return f"Error: Exa Code Context exception: {e}"
 
 
 @dataclass
