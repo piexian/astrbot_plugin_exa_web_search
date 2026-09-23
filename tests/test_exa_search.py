@@ -75,6 +75,7 @@ class ExaSearchContractTests(unittest.TestCase):
     def test_invalid_user_location_is_omitted(self):
         self.assertEqual(normalize_user_location("USA"), "")
         self.assertEqual(normalize_user_location("us"), "US")
+        self.assertEqual(normalize_user_location("中国"), "")
 
     def test_highlights_are_preferred_for_snippets(self):
         self.assertEqual(

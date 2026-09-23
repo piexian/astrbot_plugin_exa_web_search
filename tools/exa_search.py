@@ -50,7 +50,11 @@ def _split_domains(value: str) -> list[str]:
 def normalize_user_location(value: object) -> str:
     """Normalize an optional ISO two-letter user location."""
     location = str(value or "").strip().upper()
-    return location if len(location) == 2 and location.isalpha() else ""
+    return (
+        location
+        if len(location) == 2 and location.isascii() and location.isalpha()
+        else ""
+    )
 
 
 def get_result_snippet(result: dict) -> str:
