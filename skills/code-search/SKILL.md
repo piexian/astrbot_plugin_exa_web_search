@@ -7,7 +7,7 @@ description: 使用 Exa 搜索代码示例和技术文档。从 GitHub、StackOv
 
 ## 可用工具
 
-- `web_search_exa` — 语义搜索代码相关内容
+- `exa-search` — 语义搜索代码相关内容
 - `web_fetch_exa` — 提取文档/代码页面的完整内容
 
 ## 适用场景
@@ -29,12 +29,12 @@ description: 使用 Exa 搜索代码示例和技术文档。从 GitHub、StackOv
 
 ### 快速查找
 ```
-web_search_exa(query="Python asyncio gather timeout example", max_results=5)
+exa-search(query="Python asyncio gather timeout example", max_results=5)
 ```
 
 ### 复杂问题搜索
 ```
-web_search_exa(query="Next.js 14 server actions authentication pattern", max_results=10)
+exa-search(query="Next.js 14 server actions authentication pattern", max_results=10)
 ```
 
 ### 提取完整文档

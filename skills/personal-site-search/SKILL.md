@@ -7,7 +7,7 @@ description: 使用 Exa 搜索个人网站和博客。查找个人观点、作�
 
 ## 可用工具
 
-- `web_search_exa` — 语义搜索个人站点（使用 `category="personal site"`）
+- `exa-search` — 语义搜索个人站点（使用 `category="personal site"`）
 - `web_fetch_exa` — 提取博客/文章的完整内容
 
 ## 适用场景
@@ -22,12 +22,12 @@ description: 使用 Exa 搜索个人网站和博客。查找个人观点、作�
 
 ### 技术博客文章
 ```
-web_search_exa(query="building production LLM applications lessons learned", category="personal site", max_results=15)
+exa-search(query="building production LLM applications lessons learned", category="personal site", max_results=15)
 ```
 
 ### 某主题的近期文章
 ```
-web_search_exa(query="Rust async runtime comparison 2025", category="personal site", max_results=10)
+exa-search(query="Rust async runtime comparison 2025", category="personal site", max_results=10)
 ```
 
 ### 提取文章全文

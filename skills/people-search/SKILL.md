@@ -7,7 +7,7 @@ description: 使用 Exa 搜索查找人物信息。查找 LinkedIn 档案、专�
 
 ## 可用工具
 
-- `web_search_exa` — 语义搜索人物信息（使用 `category="people"`）
+- `exa-search` — 语义搜索人物信息（使用 `category="people"`）
 - `web_fetch_exa` — 提取档案/简介页面的完整内容
 
 ## 分类选择
@@ -38,18 +38,18 @@ Exa 对不同措辞返回不同结果。为提高覆盖率：
 
 ### 按角色发现人物
 ```
-web_search_exa(query="VP Engineering AI infrastructure", category="people", max_results=20)
+exa-search(query="VP Engineering AI infrastructure", category="people", max_results=20)
 ```
 
 ### 深入研究特定人物
 ```
-web_search_exa(query="Dario Amodei Anthropic CEO background", max_results=15)
+exa-search(query="Dario Amodei Anthropic CEO background", max_results=15)
 ```
 然后用 `web_fetch_exa` 提取详细页面内容。
 
 ### 新闻报道
 ```
-web_search_exa(query="Dario Amodei interview 2024", category="news", max_results=10)
+exa-search(query="Dario Amodei interview 2024", category="news", max_results=10)
 ```
 
 ## 输出格式

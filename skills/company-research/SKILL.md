@@ -7,7 +7,7 @@ description: 使用 Exa 搜索进行企业调研。查找公司信息、竞品�
 
 ## 可用工具
 
-- `web_search_exa` — 语义搜索（支持 category 垂直分类）
+- `exa-search` — 语义搜索（支持 category 垂直分类）
 - `web_fetch_exa` — 提取网页完整内容（深入了解某公司详情）
 
 ## 搜索策略
@@ -40,18 +40,18 @@ Exa 对不同措辞返回不同结果。为提高覆盖率：
 
 ### 发现某领域的公司
 ```
-web_search_exa(query="AI infrastructure startups San Francisco", category="company", max_results=20)
+exa-search(query="AI infrastructure startups San Francisco", category="company", max_results=20)
 ```
 
 ### 深入研究某公司
 ```
-web_search_exa(query="Anthropic funding rounds valuation 2024", max_results=10)
+exa-search(query="Anthropic funding rounds valuation 2024", max_results=10)
 ```
 然后用 `web_fetch_exa` 提取关键页面的详细内容。
 
 ### 查找新闻报道
 ```
-web_search_exa(query="Anthropic AI safety", category="news", max_results=15)
+exa-search(query="Anthropic AI safety", category="news", max_results=15)
 ```
 
 ## 输出格式
