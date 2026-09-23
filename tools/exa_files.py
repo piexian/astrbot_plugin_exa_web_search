@@ -165,9 +165,7 @@ def render_task_markdown(task: TaskRecord) -> str:
             "",
             "## 费用明细",
             "",
-            "```json\n"
-            + json.dumps(task.cost, ensure_ascii=False, indent=2)
-            + "\n```",
+            "```json\n" + json.dumps(task.cost, ensure_ascii=False, indent=2) + "\n```",
         )
     )
     if task.error:

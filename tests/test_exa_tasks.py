@@ -71,8 +71,12 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
             completed.task_id,
         )
         self.assertEqual(len(await self.archive.search_tasks("2026-09-24")), 2)
-        self.assertEqual((await self.archive.search_tasks("FastAPI"))[0].task_id, completed.task_id)
-        self.assertEqual((await self.archive.search_tasks("completed"))[0].task_id, completed.task_id)
+        self.assertEqual(
+            (await self.archive.search_tasks("FastAPI"))[0].task_id, completed.task_id
+        )
+        self.assertEqual(
+            (await self.archive.search_tasks("completed"))[0].task_id, completed.task_id
+        )
         self.assertEqual(await self.archive.search_tasks("%"), [])
 
         self.assertEqual(
@@ -93,6 +97,7 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(restored.status, "completed")
         self.assertEqual(restored.result_text, "final")
+
     async def test_concurrency_limit_is_atomic(self):
         await self.archive.reserve_task("one", 0, 1)
         with self.assertRaises(ConcurrencyLimitError):
@@ -128,7 +133,9 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
         result = await small_archive.cleanup_terminal(automatic=True)
         self.assertIn(completed.task_id, result.deleted_task_ids)
         self.assertNotIn(running.task_id, result.deleted_task_ids)
-        self.assertEqual((await small_archive.get_task(running.task_id)).status, "running")
+        self.assertEqual(
+            (await small_archive.get_task(running.task_id)).status, "running"
+        )
 
 
 if __name__ == "__main__":

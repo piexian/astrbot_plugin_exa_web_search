@@ -43,6 +43,7 @@ class KeySlotMismatchError(RuntimeError):
 def key_fingerprint(api_key: str) -> str:
     return hashlib.sha256(str(api_key).encode("utf-8")).hexdigest()
 
+
 @dataclass(slots=True, frozen=True)
 class TaskCreationOutcome:
     task: TaskRecord
@@ -255,9 +256,7 @@ class AgentTaskService:
             try:
                 result = await self.archive.cleanup_terminal(automatic=True)
             except sqlite3.OperationalError as exc:
-                LOGGER.warning(
-                    "自动清理任务归档失败，将重试: %s", exc
-                )
+                LOGGER.warning("自动清理任务归档失败，将重试: %s", exc)
                 await asyncio.sleep(0.05)
                 continue
             self._log_cleanup(result)
@@ -285,7 +284,6 @@ class AgentTaskService:
             raise ValueError(f"任务使用的 Key 槽位 {slot} 已失效。")
         return self._api_keys[slot]
 
-
     def _key_for_task(self, task: TaskRecord) -> str:
         api_key = self._key_for_slot(task.key_slot)
         if task.key_fingerprint and not hmac.compare_digest(
@@ -295,16 +293,13 @@ class AgentTaskService:
                 f"任务 {task.task_id} 的 API Key 槽位已变化；请恢复原 Key 后重启插件。"
             )
         return api_key
+
     def _schedule_monitor(self, task_id: str) -> None:
         if self._stopping:
             return
         existing = self._monitors.get(task_id)
         current = asyncio.current_task()
-        if (
-            existing
-            and not existing.done()
-            and existing is not current
-        ):
+        if existing and not existing.done() and existing is not current:
             return
         task = asyncio.create_task(
             self._monitor_task(task_id), name=f"exa-agent-monitor-{task_id}"
@@ -488,8 +483,7 @@ class AgentTaskService:
             "cost": remote.cost,
             "error": redact_secret(remote.error, api_key),
             "completed_at": (
-                remote.completed_at
-                or (utc_now_iso() if remote.is_terminal else None)
+                remote.completed_at or (utc_now_iso() if remote.is_terminal else None)
             ),
         }
         if remote.request_id:

@@ -24,11 +24,18 @@ class ExaCommandParsingTests(unittest.TestCase):
     def test_payload_extraction_and_search_term_preserve_spaces(self):
         payload = extract_exa_payload("exa -r  compare   a b c  ")
         self.assertEqual(parse_research_query(payload), "compare   a b c")
-        self.assertEqual(parse_search_term("-s  FastAPI   security"), "FastAPI   security")
+        self.assertEqual(
+            parse_search_term("-s  FastAPI   security"), "FastAPI   security"
+        )
         self.assertEqual(extract_exa_payload("/exa stats -q r-1"), "stats -q r-1")
+
     def test_stats_query_supports_optional_quiet_export(self):
-        self.assertEqual(parse_stats_query("r-20260924-0001"), (False, "r-20260924-0001"))
-        self.assertEqual(parse_stats_query("-q r-20260924-0001"), (True, "r-20260924-0001"))
+        self.assertEqual(
+            parse_stats_query("r-20260924-0001"), (False, "r-20260924-0001")
+        )
+        self.assertEqual(
+            parse_stats_query("-q r-20260924-0001"), (True, "r-20260924-0001")
+        )
         with self.assertRaisesRegex(ValueError, "任务号"):
             parse_stats_query("-q")
 

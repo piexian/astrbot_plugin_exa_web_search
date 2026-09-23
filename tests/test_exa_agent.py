@@ -116,6 +116,7 @@ class ExaAgentClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn("secret-key", str(raised.exception))
         self.assertTrue(raised.exception.outcome_uncertain)
+
     async def test_create_success_parsing_failures_are_uncertain(self):
         responses = [
             FakeResponse(text=""),
@@ -160,7 +161,9 @@ class ExaAgentClientTests(unittest.IsolatedAsyncioTestCase):
         events = await client.list_all_events("agent_run_123", "secret-key")
 
         self.assertEqual(len(events), 2)
-        self.assertEqual(session.calls[1]["params"], {"limit": 100, "cursor": "cursor-1"})
+        self.assertEqual(
+            session.calls[1]["params"], {"limit": 100, "cursor": "cursor-1"}
+        )
         self.assertEqual(sources_from_events(events)[0]["url"], "https://example.com/")
 
     async def test_cancel_uses_official_endpoint(self):

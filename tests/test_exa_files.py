@@ -61,9 +61,7 @@ class ExaFileRenderingTests(unittest.TestCase):
             path.unlink()
             path.touch()
             mtime = path.stat().st_mtime
-            self.assertEqual(
-                cleanup_exports(temp_dir, max_age_seconds=0, now=mtime), 0
-            )
+            self.assertEqual(cleanup_exports(temp_dir, max_age_seconds=0, now=mtime), 0)
             self.assertEqual(cleanup_exports(temp_dir, max_age_seconds=-1), 1)
             self.assertFalse(Path(path).exists())
 

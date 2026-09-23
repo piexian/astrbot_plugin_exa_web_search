@@ -134,15 +134,13 @@ def _normalize_count(value, *, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(n, maximum))
 
 
-
-def _normalize_float(
-    value, *, default: float, minimum: float, maximum: float
-) -> float:
+def _normalize_float(value, *, default: float, minimum: float, maximum: float) -> float:
     try:
         number = float(value)
     except (TypeError, ValueError):
         number = default
     return max(minimum, min(number, maximum))
+
 
 def _normalize_timeout(timeout_seconds) -> aiohttp.ClientTimeout:
     """构造 aiohttp 超时对象，确保最小值。"""
@@ -175,7 +173,6 @@ def _mask_key(key: str) -> str:
     return key[:4] + "****" + key[-4:]
 
 
-
 def _admin_session_id(event: AstrMessageEvent) -> str:
     return f"{event.unified_msg_origin}\0{event.get_sender_id()}"
 
@@ -188,6 +185,7 @@ class _AdminGroupRouteFilter(filter.CustomFilter):
 class _AdminSessionFilter(SessionFilter):
     def filter(self, event: AstrMessageEvent) -> str:
         return _admin_session_id(event)
+
 
 # 插件主类
 class ExaWebSearchPlugin(Star):
@@ -225,7 +223,11 @@ class ExaWebSearchPlugin(Star):
 
         # 检查 API Key
         raw_keys = self.config.get("exa_api_keys", [])
-        keys = [str(key).strip() for key in ([raw_keys] if isinstance(raw_keys, str) else raw_keys) if str(key).strip()]
+        keys = [
+            str(key).strip()
+            for key in ([raw_keys] if isinstance(raw_keys, str) else raw_keys)
+            if str(key).strip()
+        ]
         if not keys:
             logger.warning(
                 f"[{PLUGIN_NAME}] 未配置 Exa API Key，"
@@ -237,7 +239,6 @@ class ExaWebSearchPlugin(Star):
                 f"[{PLUGIN_NAME}] 已加载 {len(keys)} 个 API Key [{masked}]，"
                 f"Base URL: {self._base_url}"
             )
-
 
         if keys:
             try:
@@ -309,11 +310,10 @@ class ExaWebSearchPlugin(Star):
                 )
                 await service.start()
                 self._task_service = service
-                logger.info(
-                    f"[{PLUGIN_NAME}] Agent 任务归档已启用: {data_dir}"
-                )
+                logger.info(f"[{PLUGIN_NAME}] Agent 任务归档已启用: {data_dir}")
             except Exception as exc:
                 logger.error(f"[{PLUGIN_NAME}] Agent 任务归档初始化失败: {exc}")
+
     async def terminate(self):
         """插件销毁：关闭 HTTP 会话。"""
         if self._task_service:
@@ -657,9 +657,7 @@ class ExaWebSearchPlugin(Star):
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @exa_admin_group.command("-r")
-    async def exa_research_command(
-        self, event: AstrMessageEvent, query: GreedyStr
-    ):
+    async def exa_research_command(self, event: AstrMessageEvent, query: GreedyStr):
         """创建异步 Exa Agent 研究任务。"""
         service = self._task_service
         if service is None:
@@ -688,16 +686,16 @@ class ExaWebSearchPlugin(Star):
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @exa_admin_group.command("-s")
-    async def exa_search_tasks_command(
-        self, event: AstrMessageEvent, term: str = ""
-    ):
+    async def exa_search_tasks_command(self, event: AstrMessageEvent, term: str = ""):
         """搜索本地 Agent 任务归档。"""
         service = self._task_service
         if service is None:
             yield event.plain_result("Agent 任务功能未初始化，请检查插件配置和日志。")
             return
         try:
-            search_term = parse_search_term(extract_exa_payload(event.get_message_str()))
+            search_term = parse_search_term(
+                extract_exa_payload(event.get_message_str())
+            )
             tasks = await service.search_tasks(search_term)
             capacity = await service.capacity_status()
         except (TaskArchiveError, ValueError, RuntimeError) as exc:
@@ -707,9 +705,7 @@ class ExaWebSearchPlugin(Star):
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @exa_admin_group.command("stats")
-    async def exa_stats_command(
-        self, event: AstrMessageEvent, query: GreedyStr
-    ):
+    async def exa_stats_command(self, event: AstrMessageEvent, query: GreedyStr):
         """查看任务状态，或用 -q 发送 Markdown 归档。"""
         service = self._task_service
         if service is None:
@@ -727,14 +723,10 @@ class ExaWebSearchPlugin(Star):
                     markdown += f"\n\n{capacity.warning}"
                 try:
                     await event.send(
-                        MessageChain(
-                            [Comp.File(name=path.name, file=str(path))]
-                        )
+                        MessageChain([Comp.File(name=path.name, file=str(path))])
                     )
                 except Exception as exc:
-                    logger.warning(
-                        f"[{PLUGIN_NAME}] 文件发送失败，降级为文本: {exc}"
-                    )
+                    logger.warning(f"[{PLUGIN_NAME}] 文件发送失败，降级为文本: {exc}")
                     yield event.plain_result(markdown)
                 else:
                     message = f"已发送任务归档：{task.task_id}"
@@ -762,9 +754,7 @@ class ExaWebSearchPlugin(Star):
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @exa_admin_group.command("clean")
-    async def exa_clean_command(
-        self, event: AstrMessageEvent, target: str = ""
-    ):
+    async def exa_clean_command(self, event: AstrMessageEvent, target: str = ""):
         """删除一个终态任务，或确认后清理全部终态任务。"""
         service = self._task_service
         if service is None:
@@ -798,9 +788,7 @@ class ExaWebSearchPlugin(Star):
             notice += f"\n\n{preview.capacity.warning}"
         yield event.plain_result(notice)
         try:
-            await self._confirm_clean(
-                event, session_filter=_AdminSessionFilter()
-            )
+            await self._confirm_clean(event, session_filter=_AdminSessionFilter())
         except asyncio.TimeoutError:
             self._clean_outcomes[session_id] = "清理已取消：确认超时。"
         except Exception as exc:
@@ -814,9 +802,7 @@ class ExaWebSearchPlugin(Star):
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @exa_admin_group.command("cancel")
-    async def exa_cancel_command(
-        self, event: AstrMessageEvent, task_id: str = ""
-    ):
+    async def exa_cancel_command(self, event: AstrMessageEvent, task_id: str = ""):
         """取消排队或运行中的 Agent 任务。"""
         service = self._task_service
         if service is None:
@@ -864,7 +850,6 @@ class ExaWebSearchPlugin(Star):
         event.stop_event()
         controller.stop()
 
-
     def _help_text(self) -> str:
         """返回帮助文本。"""
         keys = self.config.get("exa_api_keys", [])
@@ -910,9 +895,7 @@ class ExaWebSearchPlugin(Star):
     # AstrBot 4.x uses the default value as the parser type; the class sentinel
     # keeps GreedyStr optional while retaining all remaining arguments.
     @filter.command("exa")
-    async def exa_command(
-        self, event: AstrMessageEvent, query: GreedyStr = GreedyStr
-    ):
+    async def exa_command(self, event: AstrMessageEvent, query: GreedyStr = GreedyStr):
         """执行搜索并返回结果。exa help 显示帮助文本。"""
         if query is GreedyStr:
             query = ""

@@ -15,13 +15,9 @@ TASK_STATUSES = frozenset(
     {"queued", "running", "completed", "failed", "cancelled", "interrupted"}
 )
 ACTIVE_STATUSES = frozenset({"queued", "running"})
-TERMINAL_STATUSES = frozenset(
-    {"completed", "failed", "cancelled", "interrupted"}
-)
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 AUTO_CLEANUP_STATUSES = frozenset({"completed", "failed", "cancelled"})
-MANUAL_CLEANUP_STATUSES = frozenset(
-    {"completed", "failed", "cancelled", "interrupted"}
-)
+MANUAL_CLEANUP_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 _UNSET = object()
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _COMPACT_DATE_RE = re.compile(r"^\d{8}$")
@@ -90,9 +86,7 @@ class TaskRecord:
             run_id=row["run_id"],
             key_slot=row["key_slot"],
             key_fingerprint=(
-                row["key_fingerprint"]
-                if "key_fingerprint" in row.keys()
-                else ""
+                row["key_fingerprint"] if "key_fingerprint" in row.keys() else ""
             ),
             status=row["status"],
             query=row["query"],
@@ -342,9 +336,7 @@ class TaskArchive:
                 )
                 """
             )
-            columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(tasks)")
-            }
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
             if "key_fingerprint" not in columns:
                 connection.execute(
                     "ALTER TABLE tasks ADD COLUMN key_fingerprint TEXT NOT NULL DEFAULT ''"
@@ -357,11 +349,15 @@ class TaskArchive:
                 )
                 """
             )
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)"
+            )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at)"
             )
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_tasks_task_id ON tasks(task_id)")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_task_id ON tasks(task_id)"
+            )
             connection.execute("PRAGMA user_version=2")
 
     def _reserve_task_sync(
@@ -573,9 +569,7 @@ class TaskArchive:
             if checkpoint and int(checkpoint[0] or 0):
                 raise sqlite3.OperationalError("SQLite WAL checkpoint is busy")
         connection.execute("VACUUM")
-        checkpoint = connection.execute(
-            "PRAGMA wal_checkpoint(TRUNCATE)"
-        ).fetchone()
+        checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         if checkpoint and int(checkpoint[0] or 0):
             raise sqlite3.OperationalError("SQLite WAL checkpoint is busy")
 
@@ -598,9 +592,7 @@ class TaskArchive:
             self._reclaim_sync(connection)
         return TaskRecord.from_row(row)
 
-    def _cleanup_estimate_sync(
-        self, statuses: frozenset[str]
-    ) -> tuple[int, int]:
+    def _cleanup_estimate_sync(self, statuses: frozenset[str]) -> tuple[int, int]:
         placeholders = ",".join("?" for _ in statuses)
         with self._connect() as connection:
             row = connection.execute(

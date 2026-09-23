@@ -9,9 +9,7 @@ from typing import Any
 from urllib.parse import quote
 
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
-REMOTE_STATUSES = frozenset(
-    {"queued", "running", "completed", "failed", "cancelled"}
-)
+REMOTE_STATUSES = frozenset({"queued", "running", "completed", "failed", "cancelled"})
 _COST_FIELDS = (
     "total",
     "agentCompute",
@@ -77,7 +75,9 @@ def redact_secret(value: Any, secret: str) -> str:
     return text
 
 
-def _error_fields(data: Any, headers: dict[str, str] | None = None) -> tuple[str, str, str]:
+def _error_fields(
+    data: Any, headers: dict[str, str] | None = None
+) -> tuple[str, str, str]:
     header_map = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
     if not isinstance(data, dict):
         return "", "", header_map.get("x-request-id", "")
@@ -194,9 +194,7 @@ def normalize_remote_run(data: Any) -> RemoteAgentRun:
         completed_at=(
             str(data.get("completedAt")) if data.get("completedAt") else None
         ),
-        request_id=str(
-            data.get("requestId") or data.get("request_id") or ""
-        ),
+        request_id=str(data.get("requestId") or data.get("request_id") or ""),
         text=text,
         structured=structured,
         sources=normalize_sources(output),
@@ -419,6 +417,8 @@ class ExaAgentClient:
             ) from exc
         except Exception as exc:
             raise ExaAgentAPIError(
-                redact_secret(f"Exa Agent API [{method} {endpoint}] 网络错误: {exc}", api_key),
+                redact_secret(
+                    f"Exa Agent API [{method} {endpoint}] 网络错误: {exc}", api_key
+                ),
                 outcome_uncertain=uncertain_on_server_error,
             ) from exc

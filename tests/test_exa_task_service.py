@@ -112,7 +112,9 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_create_and_poll_reuse_the_same_key_slot(self):
         self.client.create_responses.append(remote("running"))
-        self.client.get_responses.append(remote("completed", text="done", cost={"total": 2}))
+        self.client.get_responses.append(
+            remote("completed", text="done", cost={"total": 2})
+        )
 
         outcome = await self.service.create_task("compare frameworks")
 
@@ -136,9 +138,7 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
                         "id": "agent_run_recovered",
                         "status": "completed",
                         "completedAt": "2026-09-24T01:02:00Z",
-                        "request": {
-                            "metadata": {"task_id": client.last_task_id}
-                        },
+                        "request": {"metadata": {"task_id": client.last_task_id}},
                         "output": {"text": "recovered"},
                     }
                 ],
@@ -164,9 +164,7 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "id": "agent_run_running",
                         "status": "running",
-                        "request": {
-                            "metadata": {"task_id": client.last_task_id}
-                        },
+                        "request": {"metadata": {"task_id": client.last_task_id}},
                         "output": {},
                     }
                 ],
@@ -202,7 +200,9 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         try:
             restored = await self.wait_for_status(task.task_id, "completed")
             self.assertEqual(restored.result_text, "resumed")
-            self.assertEqual(self.client.get_calls[0], ("agent_run_existing", "key-one"))
+            self.assertEqual(
+                self.client.get_calls[0], ("agent_run_existing", "key-one")
+            )
         finally:
             await restarted.shutdown()
 

@@ -129,9 +129,7 @@ def _install_stubs():
     aiohttp = _module(
         "aiohttp",
         ClientSession=type("ClientSession", (), {"closed": False}),
-        ClientTimeout=type(
-            "ClientTimeout", (), {"__init__": lambda self, **_: None}
-        ),
+        ClientTimeout=type("ClientTimeout", (), {"__init__": lambda self, **_: None}),
         ClientError=type("ClientError", (Exception,), {}),
     )
     astrbot = _module("astrbot")
@@ -256,6 +254,8 @@ class FakePreviewService:
 
     async def last_cleanup(self):
         return None
+
+
 class ExaCommandRegistrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -276,6 +276,7 @@ class ExaCommandRegistrationTests(unittest.TestCase):
         public = self.module.ExaWebSearchPlugin.exa_command
         self.assertEqual(public.__command_name__, "exa")
         self.assertFalse(getattr(public, "__admin_only__", False))
+
     def test_greedy_parameters_use_framework_compatible_defaults(self):
         public_parameter = inspect.signature(
             self.module.ExaWebSearchPlugin.exa_command
@@ -333,6 +334,7 @@ class ExaCleanConfirmationTests(unittest.IsolatedAsyncioTestCase):
         second = await anext(responses)
         self.assertIn("确认清理", first.text)
         self.assertIn("超时", second.text)
+
 
 if __name__ == "__main__":
     unittest.main()

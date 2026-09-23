@@ -5,12 +5,12 @@ from __future__ import annotations
 ADMIN_ROUTE_PREFIXES = frozenset({"-r", "-s", "stats", "clean", "cancel"})
 
 
-
 def _single_token(value: str, message: str) -> str:
     text = str(value or "").strip()
     if not text or len(text.split()) != 1:
         raise ValueError(message)
     return text
+
 
 def extract_exa_payload(message: str) -> str:
     """Extract the raw payload after the /exa command prefix."""
@@ -30,6 +30,7 @@ def parse_search_term(value: str) -> str:
     if text == "-s" or text.startswith("-s "):
         text = text[2:].strip()
     return text
+
 
 def is_reserved_exa_query(value: str) -> bool:
     """Return whether a public /exa payload belongs to an admin route."""
