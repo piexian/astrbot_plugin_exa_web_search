@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +18,23 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
         self.db_path = Path(self.temp_dir.name) / "exa_tasks.sqlite3"
         self.archive = TaskArchive(self.db_path, max_size_mb=10)
         await self.archive.initialize()
+
+    async def test_sqlite_connections_are_closed_after_operations(self):
+        connections = []
+        original_connect = self.archive._connect
+
+        def tracked_connect():
+            connection = original_connect()
+            connections.append(connection)
+            return connection
+
+        self.archive._connect = tracked_connect
+        task = await self.archive.reserve_task("close", 0, 1)
+        await self.archive.get_task(task.task_id)
+        self.assertGreaterEqual(len(connections), 2)
+        for connection in connections:
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
 
     async def asyncTearDown(self):
         self.temp_dir.cleanup()

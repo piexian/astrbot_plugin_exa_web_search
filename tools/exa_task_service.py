@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
-import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +31,13 @@ from .exa_tasks import (
     utc_now_iso,
 )
 
-LOGGER = logging.getLogger(__name__)
+
+def _astrbot_logger():
+    from astrbot.api import logger
+
+    return logger
+
+
 _MAX_RECONCILE_PAGES = 100
 _RECONCILE_MISS_LIMIT = 5
 _DEFAULT_RECONCILE_RETRY_DELAY = 10.0
@@ -271,7 +276,7 @@ class AgentTaskService:
             try:
                 result = await self.archive.cleanup_terminal(automatic=True)
             except sqlite3.OperationalError as exc:
-                LOGGER.warning("自动清理任务归档失败，将重试: %s", exc)
+                _astrbot_logger().warning("自动清理任务归档失败，将重试: %s", exc)
                 await asyncio.sleep(0.05)
                 continue
             self._log_cleanup(result)
@@ -281,7 +286,7 @@ class AgentTaskService:
     def _log_cleanup(result: CleanupResult | None) -> None:
         if result is None or not result.deleted_task_ids:
             return
-        LOGGER.info(
+        _astrbot_logger().info(
             "Exa Agent 归档清理: tasks=%s freed=%s remaining=%s",
             ",".join(result.deleted_task_ids),
             result.freed_bytes,
@@ -345,7 +350,7 @@ class AgentTaskService:
         except asyncio.CancelledError:
             return
         if error:
-            LOGGER.error("Exa Agent 后台任务 %s 异常: %s", task_id, error)
+            _astrbot_logger().error("Exa Agent 后台任务 %s 异常: %s", task_id, error)
 
     async def _monitor_task(self, task_id: str) -> None:
         not_found_count = 0
@@ -365,7 +370,9 @@ class AgentTaskService:
             try:
                 api_key = self._key_for_task(task)
             except (KeySlotMismatchError, ValueError) as exc:
-                LOGGER.error("Exa Agent 任务 %s 暂停轮询: %s", task.task_id, exc)
+                _astrbot_logger().error(
+                    "Exa Agent 任务 %s 暂停轮询: %s", task.task_id, exc
+                )
                 return
             try:
                 remote = await self.client.get_run(task.run_id, api_key)
@@ -383,7 +390,7 @@ class AgentTaskService:
                 else:
                     failure_count += 1
                     if failure_count % self.status_retry_limit == 1:
-                        LOGGER.warning(
+                        _astrbot_logger().warning(
                             "查询 Exa Agent 任务 %s 失败，将继续重试: %s",
                             task.task_id,
                             redact_secret(str(exc), api_key),
@@ -422,10 +429,12 @@ class AgentTaskService:
                     await self._mark_reconcile_missing(task)
                     return
             except KeySlotMismatchError as exc:
-                LOGGER.error("核对 Exa Agent 任务 %s 暂停: %s", task.task_id, exc)
+                _astrbot_logger().error(
+                    "核对 Exa Agent 任务 %s 暂停: %s", task.task_id, exc
+                )
                 return
             except Exception as exc:
-                LOGGER.warning(
+                _astrbot_logger().warning(
                     "核对 Exa Agent 任务 %s 失败，将继续重试: %s",
                     task.task_id,
                     exc,
@@ -514,7 +523,7 @@ class AgentTaskService:
                 )
                 sources = sources_from_events(events)
             except ExaAgentAPIError as exc:
-                LOGGER.debug(
+                _astrbot_logger().debug(
                     "读取 Exa Agent 事件失败 %s: %s",
                     remote.run_id,
                     redact_secret(str(exc), api_key),

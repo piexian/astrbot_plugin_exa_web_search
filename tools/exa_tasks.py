@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import closing
 import json
 import re
 import sqlite3
@@ -313,7 +314,7 @@ class TaskArchive:
         return connection
 
     def _initialize_sync(self) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute(
@@ -373,7 +374,7 @@ class TaskArchive:
         now = now.astimezone(timezone.utc)
         timestamp = now.isoformat(timespec="seconds")
         day = now.strftime("%Y%m%d")
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 active = connection.execute(
@@ -454,7 +455,7 @@ class TaskArchive:
             fields.append("completed_at = ?")
             values.append(completed_at or None)
         values.append(task_id)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             current = connection.execute(
                 "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
             ).fetchone()
@@ -474,7 +475,7 @@ class TaskArchive:
         return TaskRecord.from_row(row)
 
     def _get_task_sync(self, task_id: str) -> TaskRecord:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
             ).fetchone()
@@ -488,7 +489,7 @@ class TaskArchive:
         except TaskNotFoundError:
             pass
         pattern = f"{_escape_like(task_id)}%"
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM tasks
@@ -505,7 +506,7 @@ class TaskArchive:
         return TaskRecord.from_row(rows[0])
 
     def _list_active_tasks_sync(self) -> list[TaskRecord]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM tasks WHERE status IN ('queued', 'running')
@@ -517,7 +518,7 @@ class TaskArchive:
     def _search_tasks_sync(self, term: str, limit: int) -> list[TaskRecord]:
         text = str(term or "").strip()
         limit = max(1, min(int(limit), 1000))
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             if not text:
                 cursor = connection.execute(
                     "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,)
@@ -574,7 +575,7 @@ class TaskArchive:
             raise sqlite3.OperationalError("SQLite WAL checkpoint is busy")
 
     def _delete_task_sync(self, task_id: str) -> TaskRecord:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 row = connection.execute(
@@ -594,7 +595,7 @@ class TaskArchive:
 
     def _cleanup_estimate_sync(self, statuses: frozenset[str]) -> tuple[int, int]:
         placeholders = ",".join("?" for _ in statuses)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 f"""
                 SELECT COUNT(*) AS task_count,
@@ -617,7 +618,7 @@ class TaskArchive:
         placeholders = ",".join("?" for _ in statuses)
         target_bytes = int(self.max_bytes * 0.9) if automatic else 0
         deleted: list[str] = []
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 rows = connection.execute(
