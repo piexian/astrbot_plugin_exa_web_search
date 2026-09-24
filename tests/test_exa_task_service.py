@@ -113,6 +113,7 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         data_dir = Path(self.temp_dir.name)
         self.archive = TaskArchive(data_dir / "tasks.sqlite3", max_size_mb=10)
         self.client = FakeAgentClient()
+        self.notification_calls = []
         self.service = AgentTaskService(
             archive=self.archive,
             client=self.client,
@@ -121,8 +122,23 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
             max_concurrency=2,
             poll_interval_seconds=0.001,
             status_retry_limit=2,
+            notification_sender=self.capture_notification,
+            notification_retry_delays=(0, 0),
         )
         await self.service.start()
+
+    async def capture_notification(self, task, body):
+        self.notification_calls.append(
+            (task.task_id, task.notification_session, body)
+        )
+
+    async def wait_for_notification(self, task_id, status):
+        for _ in range(200):
+            task = await self.archive.get_task(task_id)
+            if task.notification_status == status:
+                return task
+            await asyncio.sleep(0.001)
+        self.fail(f"notification did not reach {status}")
 
     async def asyncTearDown(self):
         await self.service.shutdown()
@@ -135,6 +151,77 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
                 return task
             await asyncio.sleep(0.001)
         self.fail(f"task did not reach {status}")
+
+    async def test_completed_task_sends_one_result_notification(self):
+        self.client.create_responses.append(remote("completed", text="full result"))
+        outcome = await self.service.create_task(
+            "research",
+            notification_session="qq_official:GroupMessage:group-1",
+            notification_scene="group",
+        )
+
+        sent = await self.wait_for_notification(outcome.task.task_id, "sent")
+        self.assertEqual(sent.notification_attempts, 1)
+        expected = (
+            outcome.task.task_id,
+            "qq_official:GroupMessage:group-1",
+            "full result",
+        )
+        self.assertEqual(self.notification_calls, [expected])
+        await self.service.get_task(outcome.task.task_id)
+        self.assertEqual(len(self.notification_calls), 1)
+
+    async def test_pending_completion_notification_recovers_after_restart(self):
+        task = await self.archive.reserve_task(
+            "restart delivery",
+            0,
+            2,
+            notification_session="qq_official:GroupMessage:group-2",
+            notification_scene="group",
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", result={"text": "recovered result"}
+        )
+        await self.service.shutdown()
+
+        self.service = AgentTaskService(
+            archive=self.archive,
+            client=self.client,
+            api_keys=["key-zero", "key-one"],
+            data_dir=self.temp_dir.name,
+            notification_sender=self.capture_notification,
+            notification_retry_delays=(0, 0),
+        )
+        await self.service.start()
+
+        restored = await self.wait_for_notification(task.task_id, "sent")
+        self.assertEqual(restored.notification_attempts, 1)
+        expected = (
+            task.task_id,
+            "qq_official:GroupMessage:group-2",
+            "recovered result",
+        )
+        self.assertEqual(self.notification_calls, [expected])
+
+    async def test_failed_notification_retries_without_recreating_agent_run(self):
+        attempts = []
+
+        async def fail_once(task, body):
+            attempts.append((task.task_id, body))
+            if len(attempts) == 1:
+                raise RuntimeError("temporary send failure")
+
+        self.service.notification_sender = fail_once
+        self.client.create_responses.append(remote("completed", text="done"))
+        outcome = await self.service.create_task(
+            "research",
+            notification_session="qq_official:FriendMessage:user-1",
+        )
+
+        sent = await self.wait_for_notification(outcome.task.task_id, "sent")
+        self.assertEqual(sent.notification_attempts, 2)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(self.client.create_calls), 1)
 
     async def test_create_and_poll_reuse_the_same_key_slot(self):
         self.client.create_responses.append(remote("running"))

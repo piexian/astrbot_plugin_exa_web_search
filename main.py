@@ -29,10 +29,13 @@ from .tools.exa_commands import (
 from .tools.exa_content import build_contents_payload
 from .tools.exa_context import build_context_payload
 from .tools.exa_files import (
+    AUTO_NOTIFICATION_TEXT_LIMIT,
     format_bytes,
+    render_completion_notification,
     render_task_list,
     render_task_markdown,
     render_task_stats,
+    write_completion_notification_markdown,
 )
 from .tools.exa_response import normalize_cost_total
 from .tools.exa_search import (
@@ -47,6 +50,7 @@ from .tools.exa_tasks import (
     ConcurrencyLimitError,
     TaskArchive,
     TaskArchiveError,
+    TaskRecord,
 )
 
 PLUGIN_NAME = "astrbot_plugin_exa_web_search"
@@ -215,6 +219,23 @@ class _AdminSessionFilter(SessionFilter):
 
 
 # 插件主类
+def _notification_scene(event: AstrMessageEvent) -> str:
+    if event.get_platform_name() != "qq_official":
+        return ""
+    raw_message = getattr(event.message_obj, "raw_message", None)
+    if getattr(raw_message, "group_openid", None):
+        return "group"
+    if getattr(raw_message, "channel_id", None):
+        return "channel"
+    return "friend" if event.is_private_chat() else ""
+
+
+def _notification_message_id(event: AstrMessageEvent) -> str:
+    if event.get_platform_name() != "qq_official":
+        return ""
+    return str(getattr(event.message_obj, "message_id", "") or "")
+
+
 class ExaWebSearchPlugin(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
@@ -239,6 +260,40 @@ class ExaWebSearchPlugin(Star):
             ExaCodeContextTool(plugin=self),
             ExaWebFetchTool(plugin=self),
         )
+
+    async def _send_agent_completion_notification(
+        self, task: TaskRecord, body: str
+    ) -> None:
+        message = render_completion_notification(task.task_id, body)
+        if len(message) <= AUTO_NOTIFICATION_TEXT_LIMIT:
+            chain = MessageChain([Comp.Plain(text=message)])
+        else:
+            path = await asyncio.to_thread(
+                write_completion_notification_markdown,
+                StarTools.get_data_dir(),
+                task.task_id,
+                body,
+            )
+            chain = MessageChain([Comp.File(name=path.name, file=str(path))])
+
+        platform_id, _, session_id = task.notification_session.split(":", 2)
+        platform_manager = getattr(self.context, "platform_manager", None)
+        for platform in getattr(platform_manager, "platform_insts", []):
+            if platform.meta().id != platform_id:
+                continue
+            remember_scene = getattr(platform, "remember_session_scene", None)
+            if task.notification_scene and callable(remember_scene):
+                remember_scene(session_id, task.notification_scene)
+            remember_message_id = getattr(
+                platform, "remember_session_message_id", None
+            )
+            if task.notification_message_id and callable(remember_message_id):
+                remember_message_id(session_id, task.notification_message_id)
+            break
+
+        sent = await self.context.send_message(task.notification_session, chain)
+        if not sent:
+            raise RuntimeError("AstrBot 未找到任务发起会话对应的平台。")
 
     async def initialize(self):
         """插件初始化：校验 API Key 并恢复 Agent 任务。"""
@@ -328,6 +383,7 @@ class ExaWebSearchPlugin(Star):
                     ),
                     effort=effort,
                     budget_max_dollars=budget,
+                    notification_sender=self._send_agent_completion_notification,
                 )
                 await service.start()
                 self._task_service = service
@@ -693,7 +749,12 @@ class ExaWebSearchPlugin(Star):
             return
         try:
             outcome = await service.create_task(
-                parse_research_query(extract_exa_payload(event.get_message_str()))
+                parse_research_query(
+                    extract_exa_payload(event.get_message_str())
+                ),
+                notification_session=event.unified_msg_origin,
+                notification_scene=_notification_scene(event),
+                notification_message_id=_notification_message_id(event),
             )
             capacity = await service.capacity_status()
         except ConcurrencyLimitError as exc:

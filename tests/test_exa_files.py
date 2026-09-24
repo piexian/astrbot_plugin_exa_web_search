@@ -3,10 +3,13 @@ import unittest
 from pathlib import Path
 
 from tools.exa_files import (
+    AUTO_NOTIFICATION_TEXT_LIMIT,
     cleanup_exports,
     format_bytes,
+    render_completion_notification,
     render_task_markdown,
     render_task_stats,
+    write_completion_notification_markdown,
     write_task_markdown,
 )
 from tools.exa_tasks import CapacityStatus, CleanupResult, TaskRecord
@@ -64,6 +67,31 @@ class ExaFileRenderingTests(unittest.TestCase):
             self.assertEqual(cleanup_exports(temp_dir, max_age_seconds=0, now=mtime), 0)
             self.assertEqual(cleanup_exports(temp_dir, max_age_seconds=-1), 1)
             self.assertFalse(Path(path).exists())
+
+    def test_completion_notification_file_contains_only_task_id_and_body(self):
+        task_id = "r-20260924-0001"
+        body = "完整结果正文" * 300
+        message = render_completion_notification(task_id, body)
+        self.assertEqual(message, f"{task_id}\n\n{body}")
+        self.assertGreater(len(message), AUTO_NOTIFICATION_TEXT_LIMIT)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = write_completion_notification_markdown(temp_dir, task_id, body)
+            self.assertEqual(path.name, f"{task_id}.md")
+            self.assertEqual(path.read_text(encoding="utf-8"), message + "\n")
+            self.assertNotIn("查询内容", path.read_text(encoding="utf-8"))
+            self.assertNotIn("费用", path.read_text(encoding="utf-8"))
+
+    def test_long_stats_summary_explains_truncation_and_explicit_export(self):
+        task = archived_task()
+        task.result = {"text": "x" * 1601}
+        text = render_task_stats(task, CapacityStatus(0, 100))
+
+        self.assertIn("仅显示前 1500 / 1601 字符", text)
+        self.assertIn("/exa stats -q r-20260924-0001", text)
+        summary = text.split("结果摘要：\n", 1)[1]
+        self.assertTrue(summary.startswith("x" * 1500))
+        self.assertIn("仅显示前 1500 / 1601 字符", summary)
 
 
 if __name__ == "__main__":

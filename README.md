@@ -69,6 +69,8 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 /exa cancel <任务号>     # 取消活动任务
 ```
 
+任务结束后会自动返回一次“任务号 + 正文”；完整消息超过 1500 字符时改发以任务号命名、仅含任务号和正文的 Markdown 文件。普通 `stats` 不发送文件，只有显式使用 `stats -q` 才导出归档。
+
 任务归档保存在插件数据目录的 `exa_tasks.sqlite3`，重启后仍可查询。归档容量达到 80% 时告警，超过 100% 自动删除最旧的终态任务；活动任务不会被自动删除。
 
 ### LLM Tool 自动调用

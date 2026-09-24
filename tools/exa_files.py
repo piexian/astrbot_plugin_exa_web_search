@@ -114,15 +114,52 @@ def render_task_stats(
     summary = task.result_summary
     if summary:
         lines.extend(("", "结果摘要：", summary[:1500]))
+        if len(summary) > 1500:
+            lines.extend(
+                (
+                    f"仅显示前 1500 / {len(summary)} 字符；",
+                    f"完整结果请显式导出：/exa stats -q {task.task_id}",
+                )
+            )
     if task.error:
         lines.extend(("", f"错误：{task.error}"))
     if remote_error:
         lines.extend(("", f"远程状态刷新失败：{remote_error}"))
+    if task.notification_status != "disabled":
+        notification_status = {
+            "pending": "待发送",
+            "sending": "发送中",
+            "sent": "已发送",
+            "failed": "发送失败",
+        }.get(task.notification_status, task.notification_status)
+        lines.extend(("", f"完成通知：{notification_status}"))
+        if task.notification_error:
+            lines.append(f"通知错误：{task.notification_error}")
     lines.extend(("", _capacity_text(capacity), _cleanup_text(cleanup)))
     warning = capacity.warning
     if warning:
         lines.append(warning)
     return "\n".join(lines)
+
+
+AUTO_NOTIFICATION_TEXT_LIMIT = 1500
+
+
+def render_completion_notification(task_id: str, body: str) -> str:
+    return f"{task_id}\n\n{body}"
+
+
+def write_completion_notification_markdown(
+    data_dir: str | Path, task_id: str, body: str
+    ) -> Path:
+    export_dir = Path(data_dir) / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    safe_task_id = re.sub(r"[^A-Za-z0-9_.-]", "_", task_id)
+    path = export_dir / f"{safe_task_id}.md"
+    path.write_text(
+        render_completion_notification(task_id, body) + "\n", encoding="utf-8"
+    )
+    return path
 
 
 def render_task_markdown(task: TaskRecord) -> str:

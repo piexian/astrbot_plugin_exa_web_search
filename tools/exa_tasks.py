@@ -61,6 +61,12 @@ class TaskRecord:
     request_id: str = ""
     cost: dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    notification_session: str = ""
+    notification_scene: str = ""
+    notification_message_id: str = ""
+    notification_status: str = "disabled"
+    notification_attempts: int = 0
+    notification_error: str = ""
 
     @property
     def is_active(self) -> bool:
@@ -99,6 +105,36 @@ class TaskRecord:
             request_id=row["request_id"] or "",
             cost=_load_object(row["cost_json"], {}),
             error=row["error"] or "",
+            notification_session=(
+                row["notification_session"]
+                if "notification_session" in row.keys()
+                else ""
+            ),
+            notification_scene=(
+                row["notification_scene"]
+                if "notification_scene" in row.keys()
+                else ""
+            ),
+            notification_message_id=(
+                row["notification_message_id"]
+                if "notification_message_id" in row.keys()
+                else ""
+            ),
+            notification_status=(
+                row["notification_status"]
+                if "notification_status" in row.keys()
+                else "disabled"
+            ),
+            notification_attempts=(
+                row["notification_attempts"]
+                if "notification_attempts" in row.keys()
+                else 0
+            ),
+            notification_error=(
+                row["notification_error"]
+                if "notification_error" in row.keys()
+                else ""
+            ),
         )
 
 
@@ -209,6 +245,9 @@ class TaskArchive:
         max_concurrency: int,
         *,
         key_fingerprint: str = "",
+        notification_session: str = "",
+        notification_scene: str = "",
+        notification_message_id: str = "",
         now: datetime | None = None,
     ) -> TaskRecord:
         text = str(query or "").strip()
@@ -223,6 +262,9 @@ class TaskArchive:
                 int(key_slot),
                 int(max_concurrency),
                 str(key_fingerprint),
+                str(notification_session).strip(),
+                str(notification_scene).strip(),
+                str(notification_message_id).strip(),
                 now or datetime.now(timezone.utc),
             )
 
@@ -272,6 +314,22 @@ class TaskArchive:
     async def list_active_tasks(self) -> list[TaskRecord]:
         async with self._lock:
             return await asyncio.to_thread(self._list_active_tasks_sync)
+
+    async def recover_pending_notifications(self) -> list[TaskRecord]:
+        async with self._lock:
+            return await asyncio.to_thread(self._recover_pending_notifications_sync)
+
+    async def claim_notification(self, task_id: str) -> TaskRecord | None:
+        async with self._lock:
+            return await asyncio.to_thread(self._claim_notification_sync, task_id)
+
+    async def finish_notification(
+        self, task_id: str, *, error: str = "", retry: bool = False
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._finish_notification_sync, task_id, str(error), bool(retry)
+            )
 
     async def delete_task(self, task_id: str) -> TaskRecord:
         before = await self.capacity_status()
@@ -333,7 +391,13 @@ class TaskArchive:
                     sources_json TEXT NOT NULL DEFAULT '[]',
                     request_id TEXT NOT NULL DEFAULT '',
                     cost_json TEXT NOT NULL DEFAULT '{}',
-                    error TEXT NOT NULL DEFAULT ''
+                    error TEXT NOT NULL DEFAULT '',
+                    notification_session TEXT NOT NULL DEFAULT '',
+                    notification_scene TEXT NOT NULL DEFAULT '',
+                    notification_message_id TEXT NOT NULL DEFAULT '',
+                    notification_status TEXT NOT NULL DEFAULT 'disabled',
+                    notification_attempts INTEGER NOT NULL DEFAULT 0,
+                    notification_error TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -342,6 +406,19 @@ class TaskArchive:
                 connection.execute(
                     "ALTER TABLE tasks ADD COLUMN key_fingerprint TEXT NOT NULL DEFAULT ''"
                 )
+            notification_columns = {
+                "notification_session": "TEXT NOT NULL DEFAULT ''",
+                "notification_scene": "TEXT NOT NULL DEFAULT ''",
+                "notification_message_id": "TEXT NOT NULL DEFAULT ''",
+                "notification_status": "TEXT NOT NULL DEFAULT 'disabled'",
+                "notification_attempts": "INTEGER NOT NULL DEFAULT 0",
+                "notification_error": "TEXT NOT NULL DEFAULT ''",
+            }
+            for name, definition in notification_columns.items():
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE tasks ADD COLUMN {name} {definition}"
+                    )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS task_counters (
@@ -359,7 +436,11 @@ class TaskArchive:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_task_id ON tasks(task_id)"
             )
-            connection.execute("PRAGMA user_version=2")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS "
+                "idx_tasks_notification ON tasks(notification_status)"
+            )
+            connection.execute("PRAGMA user_version=3")
 
     def _reserve_task_sync(
         self,
@@ -367,6 +448,9 @@ class TaskArchive:
         key_slot: int,
         max_concurrency: int,
         key_fingerprint: str,
+        notification_session: str,
+        notification_scene: str,
+        notification_message_id: str,
         now: datetime,
     ) -> TaskRecord:
         if now.tzinfo is None:
@@ -401,10 +485,27 @@ class TaskArchive:
                     INSERT INTO tasks (
                         task_id, run_id, key_slot, key_fingerprint, status, query,
                         created_at, updated_at, completed_at,
-                        result_json, sources_json, request_id, cost_json, error
-                    ) VALUES (?, NULL, ?, ?, 'queued', ?, ?, ?, NULL, '{}', '[]', '', '{}', '')
+                        result_json, sources_json, request_id, cost_json, error,
+                        notification_session, notification_scene, notification_message_id,
+                        notification_status, notification_attempts, notification_error
+                    ) VALUES (
+                        ?, NULL, ?, ?, 'queued', ?, ?, ?, NULL, '{}', '[]', '', '{}',
+                        '', ?, ?, ?,
+                        CASE WHEN ? = '' THEN 'disabled' ELSE 'pending' END, 0, ''
+                    )
                     """,
-                    (task_id, key_slot, key_fingerprint, query, timestamp, timestamp),
+                    (
+                        task_id,
+                        key_slot,
+                        key_fingerprint,
+                        query,
+                        timestamp,
+                        timestamp,
+                        notification_session,
+                        notification_scene,
+                        notification_message_id,
+                        notification_session,
+                    ),
                 )
                 connection.execute("COMMIT")
             except Exception:
@@ -515,6 +616,78 @@ class TaskArchive:
             ).fetchall()
         return [TaskRecord.from_row(row) for row in rows]
 
+    def _recover_pending_notifications_sync(self) -> list[TaskRecord]:
+        statuses = tuple(sorted(TERMINAL_STATUSES))
+        placeholders = ",".join("?" for _ in statuses)
+        with closing(self._connect()) as connection:
+            connection.execute(
+                f"""
+                UPDATE tasks SET notification_status = 'pending',
+                    notification_error = '发送中断，插件重启后恢复投递'
+                WHERE notification_status = 'sending'
+                    AND notification_session != ''
+                    AND status IN ({placeholders})
+                """,
+                statuses,
+            )
+            rows = connection.execute(
+                f"""
+                SELECT * FROM tasks
+                WHERE notification_status = 'pending'
+                    AND notification_session != ''
+                    AND status IN ({placeholders})
+                ORDER BY completed_at ASC, created_at ASC
+                """,
+                statuses,
+            ).fetchall()
+        return [TaskRecord.from_row(row) for row in rows]
+
+    def _claim_notification_sync(self, task_id: str) -> TaskRecord | None:
+        statuses = tuple(sorted(TERMINAL_STATUSES))
+        placeholders = ",".join("?" for _ in statuses)
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = connection.execute(
+                    f"""
+                    UPDATE tasks SET notification_status = 'sending',
+                        notification_attempts = notification_attempts + 1,
+                        notification_error = ''
+                    WHERE task_id = ? AND notification_status = 'pending'
+                        AND notification_session != ''
+                        AND status IN ({placeholders})
+                    """,
+                    (task_id, *statuses),
+                )
+                row = (
+                    connection.execute(
+                        "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
+                    ).fetchone()
+                    if cursor.rowcount
+                    else None
+                )
+                connection.execute("COMMIT")
+            except Exception:
+                connection.execute("ROLLBACK")
+                raise
+        return TaskRecord.from_row(row) if row is not None else None
+
+    def _finish_notification_sync(
+        self, task_id: str, error: str, retry: bool
+    ) -> None:
+        if not error:
+            status = "sent"
+        else:
+            status = "pending" if retry else "failed"
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                UPDATE tasks SET notification_status = ?, notification_error = ?
+                WHERE task_id = ? AND notification_status = 'sending'
+                """,
+                (status, error, task_id),
+            )
+
     def _search_tasks_sync(self, term: str, limit: int) -> list[TaskRecord]:
         text = str(term or "").strip()
         limit = max(1, min(int(limit), 1000))
@@ -595,6 +768,11 @@ class TaskArchive:
 
     def _cleanup_estimate_sync(self, statuses: frozenset[str]) -> tuple[int, int]:
         placeholders = ",".join("?" for _ in statuses)
+        notification_filter = (
+            " AND notification_status NOT IN ('pending', 'sending')"
+            if statuses == AUTO_CLEANUP_STATUSES
+            else ""
+        )
         with closing(self._connect()) as connection:
             row = connection.execute(
                 f"""
@@ -604,9 +782,12 @@ class TaskArchive:
                            LENGTH(status) + LENGTH(query) + LENGTH(created_at) +
                            LENGTH(updated_at) + LENGTH(COALESCE(completed_at, '')) +
                            LENGTH(result_json) + LENGTH(sources_json) +
-                           LENGTH(request_id) + LENGTH(cost_json) + LENGTH(error) + 160
+                           LENGTH(request_id) + LENGTH(cost_json) + LENGTH(error) +
+                           LENGTH(notification_session) + LENGTH(notification_scene) +
+                           LENGTH(notification_message_id) +
+                           LENGTH(notification_error) + 224
                        ), 0) AS estimated_bytes
-                FROM tasks WHERE status IN ({placeholders})
+                FROM tasks WHERE status IN ({placeholders}){notification_filter}
                 """,  # noqa: S608
                 tuple(sorted(statuses)),
             ).fetchone()
@@ -616,6 +797,11 @@ class TaskArchive:
         before = _measure_db_files(self.db_path)
         statuses = AUTO_CLEANUP_STATUSES if automatic else MANUAL_CLEANUP_STATUSES
         placeholders = ",".join("?" for _ in statuses)
+        notification_filter = (
+            " AND notification_status NOT IN ('pending', 'sending')"
+            if automatic
+            else ""
+        )
         target_bytes = int(self.max_bytes * 0.9) if automatic else 0
         deleted: list[str] = []
         with closing(self._connect()) as connection:
@@ -628,9 +814,12 @@ class TaskArchive:
                            LENGTH(status) + LENGTH(query) + LENGTH(created_at) +
                            LENGTH(updated_at) + LENGTH(COALESCE(completed_at, '')) +
                            LENGTH(result_json) + LENGTH(sources_json) +
-                           LENGTH(request_id) + LENGTH(cost_json) + LENGTH(error) + 160
+                           LENGTH(request_id) + LENGTH(cost_json) + LENGTH(error) +
+                           LENGTH(notification_session) + LENGTH(notification_scene) +
+                           LENGTH(notification_message_id) +
+                           LENGTH(notification_error) + 224
                            AS estimated_bytes
-                    FROM tasks WHERE status IN ({placeholders})
+                    FROM tasks WHERE status IN ({placeholders}){notification_filter}
                     ORDER BY created_at ASC
                     """,  # noqa: S608
                     tuple(sorted(statuses)),
