@@ -10,6 +10,7 @@
 - **多 API Key 轮询** — 支持配置多个 Key 进行轮询
 - **指令 + LLM Tool** — 既可 `/exa` 手动搜索，也可由 AI 自动调用
 - **自定义 Base URL** — 支持代理地址
+- **Agent 异步研究** — 管理员可创建、查询、恢复和归档 Exa Agent 任务
 
 ## 安装
 
@@ -39,6 +40,11 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 | 显示来源 URL | 指令结果中是否显示来源 | `true` |
 | 最大来源数量 | 显示的来源链接数量 | `5` |
 | 最大重试次数 | 指令调用时的重试次数 | `3` |
+| Agent 最大并发任务数 | 同时运行的 Agent 任务上限 | `2` |
+| Agent 状态轮询间隔 | 状态查询间隔（秒） | `5` |
+| Agent 研究强度 | minimal/low/medium/high/xhigh/auto/max | `auto` |
+| Agent 单任务预算 | 单个任务预算上限（美元） | `5` |
+| 任务归档容量上限 | SQLite 主库、WAL、SHM 总容量（MB） | `100` |
 | HTTP 代理 | 代理地址 | 空 |
 
 ## 使用方法
@@ -49,6 +55,19 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 /exa help                         # 显示帮助
 /exa Python 3.12 有什么新特性      # 执行搜索
 ```
+
+### Agent 任务（管理员）
+
+```
+/exa -r <研究问题>       # 创建异步研究任务
+/exa -s [筛选词]         # 按任务号、日期、状态或关键词查询
+/exa stats <任务号>      # 查看状态、结果、费用和容量
+/exa stats -q <任务号>   # 发送 Markdown 归档文件
+/exa clean <任务号|all>  # 清理终态任务（all 需确认）
+/exa cancel <任务号>     # 取消活动任务
+```
+
+任务归档保存在插件数据目录的 `exa_tasks.sqlite3`，重启后仍可查询。归档容量达到 80% 时告警，超过 100% 自动删除最旧的终态任务；活动任务不会被自动删除。
 
 ### LLM Tool 自动调用
 
@@ -106,12 +125,17 @@ astrbot_plugin_exa_web_search/
 │   ├── financial-report-search/SKILL.md # 财务报告搜索
 │   ├── research-paper-search/SKILL.md  # 学术论文搜索
 │   └── personal-site-search/SKILL.md   # 个人站点搜索
-├── tools/                      # Class-based LLM 工具定义
+├── tools/                      # 搜索、Agent API 与归档模块
 │   ├── __init__.py
+│   ├── exa_agent.py            # Agent API 客户端与响应规范化
+│   ├── exa_commands.py         # 指令前缀解析
 │   ├── exa_context.py          # Exa Code Context 参数校验
 │   ├── exa_content.py          # Contents 内容参数校验
+│   ├── exa_files.py             # 归档 Markdown 与容量展示
 │   ├── exa_search.py           # 搜索参数规范化与校验
-│   └── exa_tools.py            # exa-search, exa-code-context, web_fetch_exa
+│   ├── exa_task_service.py     # Agent 生命周期与恢复
+│   ├── exa_tasks.py             # SQLite 任务归档
+│   └── exa_tools.py             # LLM Tool 定义
 ├── _conf_schema.json           # AstrBot 控制台配置 UI 定义
 ├── main.py                     # 插件核心逻辑 (指令注册和初始化)
 ├── metadata.yaml               # 插件元信息

@@ -91,6 +91,43 @@
       "step": 0.5
     }
   },
+  "agent_max_concurrent": {
+    "type": "int",
+    "description": "Agent 最大并发任务数",
+    "default": 2,
+    "slider": {"min": 1, "max": 20, "step": 1}
+  },
+  "agent_poll_interval_seconds": {
+    "type": "float",
+    "description": "Agent 状态轮询间隔（秒）",
+    "default": 5.0,
+    "slider": {"min": 1, "max": 60, "step": 1}
+  },
+  "agent_status_retry_limit": {
+    "type": "int",
+    "description": "Agent 状态查询重试阈值",
+    "default": 5,
+    "slider": {"min": 1, "max": 50, "step": 1}
+  },
+  "agent_effort": {
+    "type": "string",
+    "description": "Agent 研究强度",
+    "options": ["minimal", "low", "medium", "high", "xhigh", "auto", "max"],
+    "default": "auto"
+  },
+  "agent_budget_max_dollars": {
+    "type": "float",
+    "description": "单个 Agent 任务预算上限（美元）",
+    "default": 5.0,
+    "slider": {"min": 0.5, "max": 100, "step": 0.5}
+  },
+  "task_archive_max_size_mb": {
+    "type": "int",
+    "description": "任务归档容量上限（MB）",
+    "hint": "包含 SQLite 主库、WAL 和 SHM 文件；达到 80% 告警，超过 100% 自动清理终态任务",
+    "default": 100,
+    "slider": {"min": 10, "max": 2000, "step": 10}
+  },
   "proxy": {
     "type": "string",
     "description": "HTTP 代理地址",
