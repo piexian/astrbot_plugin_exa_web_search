@@ -251,6 +251,30 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancelled.cost["total"], 0.75)
         self.assertEqual(self.client.cancel_calls, [("agent_run_cancel", "key-one")])
 
+    async def test_stats_refresh_before_run_visible_keeps_task_queued(self):
+        task = await self.archive.reserve_task("uncertain", 0, 2)
+        result = await self.service.get_task(task.task_id)
+        await self.service.shutdown()
+        restored = await self.archive.get_task(task.task_id)
+        self.assertEqual(result.task.status, "queued")
+        self.assertEqual(restored.status, "queued")
+        self.assertIn("状态查询", restored.error)
+
+    async def test_stats_refresh_404_keeps_task_running(self):
+        task = await self.archive.reserve_task("running", 0, 2)
+        await self.archive.update_task(
+            task.task_id, status="running", run_id="agent_run_404"
+        )
+        self.client.get_responses.extend(
+            [ExaAgentAPIError("not found", status=404) for _ in range(5)]
+        )
+        result = await self.service.get_task(task.task_id)
+        await self.service.shutdown()
+        restored = await self.archive.get_task(task.task_id)
+        self.assertEqual(result.task.status, "running")
+        self.assertEqual(restored.status, "running")
+        self.assertIn("状态暂时不可见", restored.error)
+
     async def test_cancel_before_run_visible_keeps_task_queued(self):
         task = await self.archive.reserve_task("uncertain", 0, 2)
         result = await self.service.cancel_task(task.task_id)

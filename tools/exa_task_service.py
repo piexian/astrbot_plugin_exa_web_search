@@ -472,17 +472,28 @@ class AgentTaskService:
 
     async def _refresh_active_task(self, task: TaskRecord) -> TaskRecord:
         if not task.run_id:
-            return await self._reconcile_once(task)
+            remote = await self._find_remote_run(task)
+            if remote is None:
+                self._schedule_reconciliation(task.task_id)
+                return await self.archive.update_task(
+                    task.task_id,
+                    error="远端 Run 尚未确认，状态查询将继续由后台核对。",
+                )
+            task = await self._apply_remote_run(
+                task.task_id, remote, self._key_for_task(task)
+            )
+            if task.is_active:
+                self._schedule_monitor(task.task_id)
+            return task
         api_key = self._key_for_task(task)
         try:
             remote = await self.client.get_run(task.run_id, api_key)
         except ExaAgentAPIError as exc:
             if exc.status == 404:
+                self._schedule_monitor(task.task_id)
                 return await self.archive.update_task(
                     task.task_id,
-                    status="interrupted",
-                    error="远端任务不存在或已过期。",
-                    completed_at=utc_now_iso(),
+                    error="远端状态暂时不可见，后台将继续核对。",
                 )
             raise
         return await self._apply_remote_run(task.task_id, remote, api_key)
