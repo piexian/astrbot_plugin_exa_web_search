@@ -1,7 +1,7 @@
 import asyncio
 import sys
-import types
 import tempfile
+import types
 import unittest
 from collections import deque
 from pathlib import Path
