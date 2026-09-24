@@ -1,6 +1,6 @@
+import sqlite3
 import tempfile
 import unittest
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 

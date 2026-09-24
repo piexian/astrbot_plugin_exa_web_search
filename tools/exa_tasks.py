@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import closing
 import json
 import re
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
