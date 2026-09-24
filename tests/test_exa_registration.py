@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-
 from tools.exa_tasks import CapacityStatus, TaskRecord
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
