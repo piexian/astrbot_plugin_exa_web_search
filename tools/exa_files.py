@@ -151,7 +151,7 @@ def render_completion_notification(task_id: str, body: str) -> str:
 
 def write_completion_notification_markdown(
     data_dir: str | Path, task_id: str, body: str
-    ) -> Path:
+) -> Path:
     export_dir = Path(data_dir) / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
     safe_task_id = re.sub(r"[^A-Za-z0-9_.-]", "_", task_id)

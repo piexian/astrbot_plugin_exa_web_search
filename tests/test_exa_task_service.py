@@ -128,9 +128,7 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.start()
 
     async def capture_notification(self, task, body):
-        self.notification_calls.append(
-            (task.task_id, task.notification_session, body)
-        )
+        self.notification_calls.append((task.task_id, task.notification_session, body))
 
     async def wait_for_notification(self, task_id, status):
         for _ in range(200):

@@ -284,9 +284,7 @@ class ExaWebSearchPlugin(Star):
             remember_scene = getattr(platform, "remember_session_scene", None)
             if task.notification_scene and callable(remember_scene):
                 remember_scene(session_id, task.notification_scene)
-            remember_message_id = getattr(
-                platform, "remember_session_message_id", None
-            )
+            remember_message_id = getattr(platform, "remember_session_message_id", None)
             if task.notification_message_id and callable(remember_message_id):
                 remember_message_id(session_id, task.notification_message_id)
             break
@@ -749,9 +747,7 @@ class ExaWebSearchPlugin(Star):
             return
         try:
             outcome = await service.create_task(
-                parse_research_query(
-                    extract_exa_payload(event.get_message_str())
-                ),
+                parse_research_query(extract_exa_payload(event.get_message_str())),
                 notification_session=event.unified_msg_origin,
                 notification_scene=_notification_scene(event),
                 notification_message_id=_notification_message_id(event),

@@ -111,9 +111,7 @@ class TaskRecord:
                 else ""
             ),
             notification_scene=(
-                row["notification_scene"]
-                if "notification_scene" in row.keys()
-                else ""
+                row["notification_scene"] if "notification_scene" in row.keys() else ""
             ),
             notification_message_id=(
                 row["notification_message_id"]
@@ -131,9 +129,7 @@ class TaskRecord:
                 else 0
             ),
             notification_error=(
-                row["notification_error"]
-                if "notification_error" in row.keys()
-                else ""
+                row["notification_error"] if "notification_error" in row.keys() else ""
             ),
         )
 
@@ -672,9 +668,7 @@ class TaskArchive:
                 raise
         return TaskRecord.from_row(row) if row is not None else None
 
-    def _finish_notification_sync(
-        self, task_id: str, error: str, retry: bool
-    ) -> None:
+    def _finish_notification_sync(self, task_id: str, error: str, retry: bool) -> None:
         if not error:
             status = "sent"
         else:

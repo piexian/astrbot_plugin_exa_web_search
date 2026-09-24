@@ -6,9 +6,10 @@ import asyncio
 import hashlib
 import hmac
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from .exa_agent import (
     ExaAgentAPIError,
@@ -441,9 +442,7 @@ class AgentTaskService:
                     return
             else:
                 await self.archive.finish_notification(task_id)
-                _astrbot_logger().info(
-                    "Exa Agent 完成通知已发送: task=%s", task_id
-                )
+                _astrbot_logger().info("Exa Agent 完成通知已发送: task=%s", task_id)
                 return
 
     def _notification_done(self, task_id: str, task: asyncio.Task[None]) -> None:
