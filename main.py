@@ -1,6 +1,8 @@
 import asyncio
 import json
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 import aiohttp
@@ -52,6 +54,9 @@ PLUGIN_NAME = "astrbot_plugin_exa_web_search"
 # 可重试 HTTP 状态码
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503})
 
+# 限制服务端建议的等待时间，避免单次限流长期占用指令。
+_MAX_RETRY_AFTER_SECONDS = 300
+
 # Base URL 禁止的端点路径后缀
 _DISALLOWED_PATH_SUFFIXES = frozenset(
     {"search", "contents", "answer", "context", "agent", "runs", "events"}
@@ -90,11 +95,13 @@ class ExaAPIError(Exception):
         status: int = 0,
         tag: str = "",
         request_id: str = "",
+        retry_after: float | None = None,
     ):
         super().__init__(message)
         self.status = status
         self.tag = tag
         self.request_id = request_id
+        self.retry_after = retry_after
 
     @property
     def retryable(self) -> bool:
@@ -108,7 +115,7 @@ def _normalize_base_url(base_url: str) -> str:
     """规范化 Base URL：去尾斜杠、校验协议、拒绝端点路径后缀。"""
     normalized = (base_url or "").strip().rstrip("/")
     if not normalized:
-        return "https://api.exa.ai"
+        raise ValueError("Exa API Base URL 不能为空，请配置有效的基础地址。")
 
     parsed = urlparse(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -123,6 +130,26 @@ def _normalize_base_url(base_url: str) -> str:
             f"（如 /search、/contents、/context、/agent），当前值: {normalized!r}"
         )
     return normalized
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """解析 429 的秒数或 HTTP 日期；无效值交由指数退避处理。"""
+    if not value:
+        return None
+    text = value.strip()
+    if text.isascii() and text.isdigit():
+        seconds = text.lstrip("0") or "0"
+        if len(seconds) > len(str(_MAX_RETRY_AFTER_SECONDS)):
+            return _MAX_RETRY_AFTER_SECONDS
+        return min(int(seconds), _MAX_RETRY_AFTER_SECONDS)
+    try:
+        retry_at = parsedate_to_datetime(text)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if retry_at.tzinfo is None:
+        return None
+    seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
+    return min(max(seconds, 0), _MAX_RETRY_AFTER_SECONDS)
 
 
 def _normalize_count(value, *, default: int, minimum: int, maximum: int) -> int:
@@ -194,7 +221,9 @@ class ExaWebSearchPlugin(Star):
         self.config = config or {}
         self._session: aiohttp.ClientSession | None = None
         self._key_rotator = _KeyRotator()
-        self._base_url: str = "https://api.exa.ai"
+        self._base_url = _normalize_base_url(
+            self.config.get("exa_base_url", "https://api.exa.ai")
+        )
 
         self._task_service: AgentTaskService | None = None
         self._clean_outcomes: dict[str, str] = {}
@@ -212,15 +241,7 @@ class ExaWebSearchPlugin(Star):
         )
 
     async def initialize(self):
-        """插件初始化：验证配置并规范化 Base URL。"""
-        # 解析并验证 Base URL
-        raw_url = self.config.get("exa_base_url", "https://api.exa.ai")
-        try:
-            self._base_url = _normalize_base_url(raw_url)
-        except ValueError as e:
-            logger.error(f"[{PLUGIN_NAME}] {e}")
-            return
-
+        """插件初始化：校验 API Key 并恢复 Agent 任务。"""
         # 检查 API Key
         raw_keys = self.config.get("exa_api_keys", [])
         keys = [
@@ -429,6 +450,11 @@ class ExaWebSearchPlugin(Star):
                     status=resp.status,
                     tag=tag,
                     request_id=request_id,
+                    retry_after=(
+                        _parse_retry_after(resp.headers.get("Retry-After"))
+                        if resp.status == 429
+                        else None
+                    ),
                 )
 
         except aiohttp.ClientError as e:
@@ -565,6 +591,8 @@ class ExaWebSearchPlugin(Star):
                 retries += 1
                 # 指数退避
                 delay = retry_delay * (2**attempt)
+                if e.status == 429 and e.retry_after is not None:
+                    delay = e.retry_after
                 logger.info(
                     f"[{PLUGIN_NAME}] 搜索失败（HTTP {e.status}），"
                     f"{delay:.1f}s 后重试 ({retries}/{max_retries})"

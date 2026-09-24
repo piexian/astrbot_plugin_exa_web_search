@@ -4,8 +4,11 @@ import inspect
 import sys
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from tools.exa_tasks import CapacityStatus, TaskRecord
 
@@ -371,6 +374,98 @@ class ExaCleanConfirmationTests(unittest.IsolatedAsyncioTestCase):
         second = await anext(responses)
         self.assertIn("确认清理", first.text)
         self.assertIn("超时", second.text)
+
+
+class ExaRequestSafetyTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        _install_stubs()
+        cls.module = importlib.import_module(MODULE_NAME)
+
+    async def test_invalid_base_url_fails_before_tool_registration(self):
+        for base_url in ("", "  ", "not-a-url", "https://api.exa.ai/search"):
+            with self.subTest(base_url=base_url):
+                context = FakeContext()
+                with self.assertRaises(ValueError):
+                    self.module.ExaWebSearchPlugin(
+                        context, {"exa_base_url": base_url, "exa_api_keys": ["key"]}
+                    )
+                self.assertEqual(context.tools, [])
+
+    async def test_missing_base_url_uses_explicit_default(self):
+        plugin = self.module.ExaWebSearchPlugin(FakeContext(), {})
+        self.assertEqual(plugin._base_url, "https://api.exa.ai")
+
+    async def test_retry_after_header_is_passed_through_and_bounded(self):
+        class RateLimitedResponse:
+            status = 429
+
+            def __init__(self, header):
+                self.headers = {"Retry-After": header}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def text(self):
+                return '{"error": "rate limited"}'
+
+        class FakeSession:
+            def __init__(self, header):
+                self.response = RateLimitedResponse(header)
+
+            def post(self, *_args, **_kwargs):
+                return self.response
+
+        plugin = self.module.ExaWebSearchPlugin(
+            FakeContext(), {"exa_api_keys": ["key"]}
+        )
+        for header, expected in (
+            ("17", 17),
+            ("9999", 300),
+            ("9" * 5000, 300),
+            ("00017", 17),
+            ("invalid", None),
+        ):
+            with self.subTest(header=header):
+                plugin._get_session = lambda h=header: FakeSession(h)
+                with self.assertRaises(self.module.ExaAPIError) as caught:
+                    await plugin._exa_request("/search", {"query": "test"})
+                self.assertEqual(caught.exception.retry_after, expected)
+
+    async def test_retry_after_http_date_and_fallback(self):
+        future = datetime.now(timezone.utc) + timedelta(seconds=60)
+        http_date = format_datetime(future, usegmt=True)
+        self.assertLessEqual(self.module._parse_retry_after(http_date), 60)
+        self.assertGreater(self.module._parse_retry_after(http_date), 0)
+        self.assertEqual(self.module._parse_retry_after("0"), 0)
+        self.assertIsNone(self.module._parse_retry_after("nope"))
+
+        plugin = self.module.ExaWebSearchPlugin(
+            FakeContext(), {"exa_api_keys": ["key"], "max_retries": 1, "retry_delay": 2}
+        )
+        for status, retry_after, expected in (
+            (429, 17, 17),
+            (429, None, 2),
+            (500, 17, 2),
+        ):
+            with self.subTest(retry_after=retry_after):
+                plugin._exa_search = AsyncMock(
+                    side_effect=[
+                        self.module.ExaAPIError(
+                            "rate limited", status=status, retry_after=retry_after
+                        ),
+                        [],
+                    ]
+                )
+                with patch.object(
+                    self.module.asyncio, "sleep", new_callable=AsyncMock
+                ) as sleeper:
+                    result = await plugin._search_with_retry("test")
+                self.assertTrue(result["ok"])
+                sleeper.assert_awaited_once_with(expected)
 
 
 if __name__ == "__main__":

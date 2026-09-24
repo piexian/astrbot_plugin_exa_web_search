@@ -47,6 +47,8 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 | 任务归档容量上限 | SQLite 主库、WAL、SHM 总容量（MB） | `100` |
 | HTTP 代理 | 代理地址 | 空 |
 
+无效或空白的 Base URL 会使插件加载失败。
+
 ## 使用方法
 
 ### 指令搜索
@@ -140,7 +142,7 @@ astrbot_plugin_exa_web_search/
 ├── main.py                     # 插件核心逻辑 (指令注册和初始化)
 ├── metadata.yaml               # 插件元信息
 ├── README.md                   # 说明文档
-└── LICENSE                     # GPL-3.0 许可证
+└── LICENSE                     # AGPL-3.0 许可证
 ```
 
 ## 相关链接
@@ -151,4 +153,4 @@ astrbot_plugin_exa_web_search/
 
 ## 许可证
 
-GPL-3.0 License
+AGPL-3.0 License
