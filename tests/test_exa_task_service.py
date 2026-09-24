@@ -1,4 +1,6 @@
 import asyncio
+import sys
+import types
 import tempfile
 import unittest
 from collections import deque
@@ -11,6 +13,24 @@ from tools.exa_task_service import (
     key_fingerprint,
 )
 from tools.exa_tasks import TaskArchive
+
+
+def setUpModule():
+    try:
+        import astrbot.api  # noqa: F401
+    except ModuleNotFoundError:
+        astrbot = types.ModuleType("astrbot")
+        astrbot.__path__ = []
+        api = types.ModuleType("astrbot.api")
+
+        class FakeLogger:
+            def __getattr__(self, _name):
+                return lambda *_args, **_kwargs: None
+
+        api.logger = FakeLogger()
+        astrbot.api = api
+        sys.modules["astrbot"] = astrbot
+        sys.modules["astrbot.api"] = api
 
 
 def remote(status="running", run_id="agent_run_1", text="", sources=None, cost=None):
@@ -33,6 +53,7 @@ class FakeAgentClient:
         self.create_responses = deque()
         self.get_responses = deque()
         self.list_responses = deque()
+        self.event_responses = deque()
         self.cancel_response = None
         self.create_calls = []
         self.get_calls = []
@@ -72,6 +93,11 @@ class FakeAgentClient:
         return result
 
     async def list_all_events(self, _run_id, _api_key, **_kwargs):
+        if self.event_responses:
+            result = self.event_responses.popleft()
+            if isinstance(result, Exception):
+                raise result
+            return result
         return []
 
     async def cancel_run(self, run_id, api_key):
@@ -126,6 +152,35 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         db_bytes = (Path(self.temp_dir.name) / "tasks.sqlite3").read_bytes()
         self.assertNotIn(b"key-zero", db_bytes)
         self.assertNotIn(b"key-one", db_bytes)
+
+    async def test_terminal_sources_recover_after_transient_event_failure(self):
+        self.service.source_recovery_delay_seconds = 0.001
+        task = await self.archive.reserve_task("sources", 0, 2)
+        self.client.event_responses.extend(
+            [
+                ExaAgentAPIError("events unavailable"),
+                [
+                    {
+                        "event": "agent_run.source.added",
+                        "data": {
+                            "url": "https://example.com/recovered",
+                            "title": "Recovered",
+                        },
+                    }
+                ],
+            ]
+        )
+        terminal = await self.service._apply_remote_run(
+            task.task_id, remote("completed", text="done"), "key-zero"
+        )
+        self.assertEqual(terminal.status, "completed")
+        self.assertEqual(terminal.sources, [])
+        for _ in range(200):
+            restored = await self.archive.get_task(task.task_id)
+            if restored.sources:
+                break
+            await asyncio.sleep(0.001)
+        self.assertEqual(restored.sources[0]["url"], "https://example.com/recovered")
 
     async def test_uncertain_create_reconciles_metadata_without_recreating(self):
         self.client.create_responses.append(
@@ -210,6 +265,25 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task.result_text, "delayed")
         self.assertGreaterEqual(len(self.client.list_calls), 2)
 
+    async def test_monitor_resets_404_streak_after_other_error(self):
+        self.service.poll_interval_seconds = 0.001
+        task = await self.archive.reserve_task("404 streak", 0, 2)
+        await self.archive.update_task(
+            task.task_id, status="running", run_id="agent_run_404_streak"
+        )
+        self.client.get_responses.extend(
+            [
+                ExaAgentAPIError("not found", status=404),
+                ExaAgentAPIError("server error", status=500),
+                ExaAgentAPIError("not found", status=404),
+                ExaAgentAPIError("not found", status=404),
+                remote("completed", "agent_run_404_streak", text="recovered"),
+            ]
+        )
+        self.service._schedule_monitor(task.task_id)
+        restored = await self.wait_for_status(task.task_id, "completed")
+        self.assertEqual(restored.result_text, "recovered")
+
     async def test_restart_recovers_existing_run(self):
         task = await self.archive.reserve_task("resume", 1, 2)
         await self.archive.update_task(
@@ -250,6 +324,19 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancelled.status, "cancelled")
         self.assertEqual(cancelled.cost["total"], 0.75)
         self.assertEqual(self.client.cancel_calls, [("agent_run_cancel", "key-one")])
+
+    async def test_cancel_404_keeps_task_active_for_monitor(self):
+        task = await self.archive.reserve_task("cancel 404", 0, 2)
+        await self.archive.update_task(
+            task.task_id, status="running", run_id="agent_run_cancel_404"
+        )
+        self.client.cancel_response = ExaAgentAPIError("not found", status=404)
+        result = await self.service.cancel_task(task.task_id)
+        await self.service.shutdown()
+        restored = await self.archive.get_task(task.task_id)
+        self.assertEqual(result.status, "running")
+        self.assertEqual(restored.status, "running")
+        self.assertIn("取消接口暂时返回 404", restored.error)
 
     async def test_stats_refresh_before_run_visible_keeps_task_queued(self):
         task = await self.archive.reserve_task("uncertain", 0, 2)

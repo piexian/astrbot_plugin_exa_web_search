@@ -144,6 +144,12 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
             status="completed",
             result={"text": "x" * 20_000},
         )
+        interrupted = await small_archive.reserve_task("interrupted", 1, 2)
+        await small_archive.update_task(
+            interrupted.task_id,
+            status="interrupted",
+            result={"text": "y" * 20_000},
+        )
         running = await small_archive.reserve_task("running", 1, 2)
         await small_archive.update_task(running.task_id, status="running")
 
@@ -151,6 +157,7 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(capacity.percent, 100)
         result = await small_archive.cleanup_terminal(automatic=True)
         self.assertIn(completed.task_id, result.deleted_task_ids)
+        self.assertIn(interrupted.task_id, result.deleted_task_ids)
         self.assertNotIn(running.task_id, result.deleted_task_ids)
         self.assertEqual(
             (await small_archive.get_task(running.task_id)).status, "running"

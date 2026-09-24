@@ -41,6 +41,8 @@ def _astrbot_logger():
 _MAX_RECONCILE_PAGES = 100
 _RECONCILE_MISS_LIMIT = 5
 _DEFAULT_RECONCILE_RETRY_DELAY = 10.0
+_SOURCE_RECOVERY_ATTEMPTS = 5
+_DEFAULT_SOURCE_RECOVERY_DELAY = 10.0
 
 
 class KeySlotMismatchError(RuntimeError):
@@ -76,6 +78,7 @@ class AgentTaskService:
         max_concurrency: int = 2,
         poll_interval_seconds: float = 5,
         reconcile_retry_delay_seconds: float = _DEFAULT_RECONCILE_RETRY_DELAY,
+        source_recovery_delay_seconds: float = _DEFAULT_SOURCE_RECOVERY_DELAY,
         status_retry_limit: int = 5,
         effort: str = "auto",
         budget_max_dollars: float | None = 5.0,
@@ -89,6 +92,8 @@ class AgentTaskService:
             raise ValueError("agent_poll_interval_seconds 必须大于 0。")
         if float(reconcile_retry_delay_seconds) <= 0:
             raise ValueError("reconcile_retry_delay_seconds 必须大于 0。")
+        if float(source_recovery_delay_seconds) <= 0:
+            raise ValueError("source_recovery_delay_seconds 必须大于 0。")
         self.archive = archive
         self.client = client
         self._api_keys = tuple(str(key) for key in api_keys if str(key).strip())
@@ -98,6 +103,7 @@ class AgentTaskService:
         self.max_concurrency = int(max_concurrency)
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.reconcile_retry_delay_seconds = float(reconcile_retry_delay_seconds)
+        self.source_recovery_delay_seconds = float(source_recovery_delay_seconds)
         self.status_retry_limit = max(1, int(status_retry_limit))
         self.effort = effort
         self.budget_max_dollars = budget_max_dollars
@@ -105,6 +111,7 @@ class AgentTaskService:
         self._key_index = 0
         self._key_lock = asyncio.Lock()
         self._monitors: dict[str, asyncio.Task[None]] = {}
+        self._source_recovery_tasks: dict[str, asyncio.Task[None]] = {}
         self._stopping = False
         self._started = False
 
@@ -123,12 +130,16 @@ class AgentTaskService:
 
     async def shutdown(self) -> None:
         self._stopping = True
-        tasks = list(self._monitors.values())
+        tasks = [
+            *self._monitors.values(),
+            *self._source_recovery_tasks.values(),
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._monitors.clear()
+        self._source_recovery_tasks.clear()
 
     async def create_task(self, query: str) -> TaskCreationOutcome:
         text = str(query or "").strip()
@@ -229,11 +240,10 @@ class AgentTaskService:
         except ExaAgentAPIError as exc:
             error = redact_secret(str(exc), api_key)
             if exc.status == 404:
+                self._schedule_monitor(task.task_id)
                 return await self.archive.update_task(
                     task.task_id,
-                    status="interrupted",
-                    error="远端任务不存在或已过期。",
-                    completed_at=utc_now_iso(),
+                    error="取消接口暂时返回 404，任务仍保持活动状态并继续监控。",
                 )
             if exc.outcome_uncertain:
                 return await self.archive.update_task(task.task_id, error=error)
@@ -340,6 +350,63 @@ class AgentTaskService:
         self._monitors[task_id] = task
         task.add_done_callback(lambda done, tid=task_id: self._monitor_done(tid, done))
 
+    def _schedule_source_recovery(
+        self, task_id: str, run_id: str, api_key: str
+    ) -> None:
+        if self._stopping:
+            return
+        existing = self._source_recovery_tasks.get(task_id)
+        if existing and not existing.done():
+            return
+        task = asyncio.create_task(
+            self._recover_sources(task_id, run_id, api_key),
+            name=f"exa-agent-sources-{task_id}",
+        )
+        self._source_recovery_tasks[task_id] = task
+        task.add_done_callback(
+            lambda done, tid=task_id: self._source_recovery_done(tid, done)
+        )
+
+    async def _recover_sources(self, task_id: str, run_id: str, api_key: str) -> None:
+        for attempt in range(_SOURCE_RECOVERY_ATTEMPTS):
+            if self._stopping:
+                return
+            try:
+                events = await self.client.list_all_events(
+                    run_id,
+                    api_key,
+                    max_pages=self.archive_event_pages,
+                )
+                sources = sources_from_events(events)
+                if sources:
+                    await self.archive.update_task(task_id, sources=sources)
+                    return
+            except TaskNotFoundError:
+                return
+            except ExaAgentAPIError as exc:
+                _astrbot_logger().warning(
+                    "Exa Agent 任务 %s 来源恢复失败，将继续重试: %s",
+                    task_id,
+                    redact_secret(str(exc), api_key),
+                )
+            if attempt + 1 < _SOURCE_RECOVERY_ATTEMPTS:
+                await self._sleep_or_stop(self.source_recovery_delay_seconds)
+        _astrbot_logger().warning("Exa Agent 任务 %s 来源恢复重试已耗尽", task_id)
+
+    def _source_recovery_done(self, task_id: str, task: asyncio.Task[None]) -> None:
+        if self._source_recovery_tasks.get(task_id) is task:
+            self._source_recovery_tasks.pop(task_id, None)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            return
+        if error:
+            _astrbot_logger().error(
+                "Exa Agent 来源恢复任务 %s 异常: %s", task_id, error
+            )
+
     def _monitor_done(self, task_id: str, task: asyncio.Task[None]) -> None:
         if self._monitors.get(task_id) is task:
             self._monitors.pop(task_id, None)
@@ -388,6 +455,7 @@ class AgentTaskService:
                         )
                         return
                 else:
+                    not_found_count = 0
                     failure_count += 1
                     if failure_count % self.status_retry_limit == 1:
                         _astrbot_logger().warning(
@@ -514,7 +582,8 @@ class AgentTaskService:
         if current.status in TERMINAL_STATUSES:
             return current
         sources = list(remote.sources)
-        if remote.is_terminal and not sources:
+        source_recovery_needed = remote.is_terminal and not sources
+        if source_recovery_needed:
             try:
                 events = await self.client.list_all_events(
                     remote.run_id,
@@ -541,7 +610,10 @@ class AgentTaskService:
         }
         if remote.request_id:
             update["request_id"] = remote.request_id
-        return await self.archive.update_task(task_id, **update)
+        updated = await self.archive.update_task(task_id, **update)
+        if source_recovery_needed and not sources:
+            self._schedule_source_recovery(task_id, remote.run_id, api_key)
+        return updated
 
     async def _sleep_or_stop(self, seconds: float) -> None:
         if self._stopping:

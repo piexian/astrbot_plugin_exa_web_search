@@ -17,7 +17,7 @@ TASK_STATUSES = frozenset(
 )
 ACTIVE_STATUSES = frozenset({"queued", "running"})
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
-AUTO_CLEANUP_STATUSES = frozenset({"completed", "failed", "cancelled"})
+AUTO_CLEANUP_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 MANUAL_CLEANUP_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 _UNSET = object()
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
