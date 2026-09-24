@@ -7,6 +7,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+
+from tools.exa_tasks import CapacityStatus, TaskRecord
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = str(PROJECT_ROOT.parent)
 MODULE_NAME = "astrbot_plugin_exa_web_search.main"
@@ -256,6 +259,28 @@ class FakePreviewService:
         return None
 
 
+class FakeStatsService:
+    async def get_task(self, task_id):
+        task = TaskRecord(
+            task_id=task_id,
+            run_id="agent_run_1",
+            key_slot=0,
+            status="completed",
+            query="stats route",
+            created_at="2026-09-24T01:00:00+00:00",
+            updated_at="2026-09-24T01:01:00+00:00",
+            completed_at="2026-09-24T01:01:00+00:00",
+            result={"text": "done"},
+        )
+        return SimpleNamespace(task=task, remote_error="")
+
+    async def capacity_status(self):
+        return CapacityStatus(0, 100 * 1024 * 1024)
+
+    async def last_cleanup(self):
+        return None
+
+
 class ExaCommandRegistrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -300,6 +325,19 @@ class ExaCleanConfirmationTests(unittest.IsolatedAsyncioTestCase):
         self.plugin = self.module.ExaWebSearchPlugin(FakeContext(), {})
         self.service = FakeCleanupService()
         self.plugin._task_service = self.service
+
+    async def test_stats_handler_uses_bound_query_argument(self):
+        self.plugin._task_service = FakeStatsService()
+        command = self.module.ExaWebSearchPlugin.exa_admin_group.commands["stats"]
+        result = await anext(
+            command(
+                self.plugin,
+                FakeEvent("exa stats r-20260924-0001"),
+                "r-20260924-0001",
+            )
+        )
+        self.assertIn("r-20260924-0001", result.text)
+        self.assertIn("stats route", result.text)
 
     async def test_exact_confirmation_deletes_and_stops_session(self):
         event = FakeEvent("确认清理")

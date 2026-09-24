@@ -131,6 +131,18 @@ class ExaAgentClientTests(unittest.IsolatedAsyncioTestCase):
                     await client.create_run("query", "secret-key")
                 self.assertTrue(raised.exception.outcome_uncertain)
 
+    async def test_malformed_status_response_is_retryable_error(self):
+        client = ExaAgentClient(
+            FakeSession(
+                FakeResponse(payload={"id": "agent_run_1", "status": "paused"})
+            ),
+            "https://api.exa.ai",
+        )
+        with self.assertRaises(ExaAgentAPIError) as raised:
+            await client.get_run("agent_run_1", "secret-key")
+        self.assertEqual(raised.exception.status, 200)
+        self.assertIn("继续重试", str(raised.exception))
+
     async def test_event_pagination_uses_cursor_and_stops(self):
         session = FakeSession(
             FakeResponse(

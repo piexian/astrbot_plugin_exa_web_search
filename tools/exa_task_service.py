@@ -204,7 +204,16 @@ class AgentTaskService:
         if not task.is_active:
             return task
         if not task.run_id:
-            task = await self._reconcile_once(task)
+            remote = await self._find_remote_run(task)
+            if remote is None:
+                self._schedule_reconciliation(task.task_id)
+                return await self.archive.update_task(
+                    task.task_id,
+                    error="远端 Run 尚未确认，未执行取消；后台将继续核对。",
+                )
+            task = await self._apply_remote_run(
+                task.task_id, remote, self._key_for_task(task)
+            )
         if not task.is_active:
             return task
         if not task.run_id:

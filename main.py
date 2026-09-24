@@ -712,9 +712,7 @@ class ExaWebSearchPlugin(Star):
             yield event.plain_result("Agent 任务功能未初始化，请检查插件配置和日志。")
             return
         try:
-            export, task_id = parse_stats_query(
-                extract_exa_payload(event.get_message_str())
-            )
+            export, task_id = parse_stats_query(query)
             if export:
                 task, path = await service.get_export_task(task_id)
                 markdown = render_task_markdown(task)
@@ -818,6 +816,8 @@ class ExaWebSearchPlugin(Star):
             yield event.plain_result(f"取消任务失败：{exc}")
             return
         text = f"任务 {task.task_id} 状态：{task.status}"
+        if task.error:
+            text += f"\n\n{task.error}"
         if capacity.warning:
             text += f"\n\n{capacity.warning}"
         yield event.plain_result(text)

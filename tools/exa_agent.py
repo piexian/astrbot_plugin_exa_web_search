@@ -285,7 +285,12 @@ class ExaAgentClient:
         data = await self._request(
             "GET", f"/agent/runs/{quote(run_id, safe='')}", api_key
         )
-        return normalize_remote_run(data)
+        try:
+            return normalize_remote_run(data)
+        except (TypeError, ValueError) as exc:
+            raise ExaAgentAPIError(
+                "Exa Agent 状态响应无法解析，将继续重试。", status=200
+            ) from exc
 
     async def list_runs(
         self,
@@ -347,7 +352,10 @@ class ExaAgentClient:
             api_key,
             uncertain_on_server_error=True,
         )
-        return normalize_remote_run(data)
+        try:
+            return normalize_remote_run(data)
+        except (TypeError, ValueError) as exc:
+            raise ExaAgentAPIError("Exa Agent 取消响应无法解析。", status=200) from exc
 
     async def _request(
         self,

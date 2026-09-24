@@ -251,6 +251,13 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancelled.cost["total"], 0.75)
         self.assertEqual(self.client.cancel_calls, [("agent_run_cancel", "key-one")])
 
+    async def test_cancel_before_run_visible_keeps_task_queued(self):
+        task = await self.archive.reserve_task("uncertain", 0, 2)
+        result = await self.service.cancel_task(task.task_id)
+        self.assertEqual(result.status, "queued")
+        self.assertIn("未执行取消", result.error)
+        self.assertEqual(self.client.create_calls, [])
+
     async def test_reordered_keys_fail_closed_without_remote_request(self):
         task = await self.archive.reserve_task(
             "key bound",
