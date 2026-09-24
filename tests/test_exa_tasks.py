@@ -71,6 +71,7 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
             completed.task_id,
         )
         self.assertEqual(len(await self.archive.search_tasks("2026-09-24")), 2)
+        self.assertEqual(len(await self.archive.search_tasks("20260924")), 2)
         self.assertEqual(
             (await self.archive.search_tasks("FastAPI"))[0].task_id, completed.task_id
         )

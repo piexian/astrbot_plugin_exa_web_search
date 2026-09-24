@@ -532,7 +532,7 @@ class TaskArchive:
                 )
             elif _DATE_RE.match(text) or _COMPACT_DATE_RE.match(text):
                 date_text = (
-                    f"{text[:4]}-{text[5:7]}-{text[8:10]}"
+                    f"{text[:4]}-{text[4:6]}-{text[6:8]}"
                     if _COMPACT_DATE_RE.match(text)
                     else text
                 )

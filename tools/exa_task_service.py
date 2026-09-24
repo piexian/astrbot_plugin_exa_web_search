@@ -34,6 +34,8 @@ from .exa_tasks import (
 
 LOGGER = logging.getLogger(__name__)
 _MAX_RECONCILE_PAGES = 100
+_RECONCILE_MISS_LIMIT = 5
+_DEFAULT_RECONCILE_RETRY_DELAY = 10.0
 
 
 class KeySlotMismatchError(RuntimeError):
@@ -68,6 +70,7 @@ class AgentTaskService:
         data_dir: str | Path,
         max_concurrency: int = 2,
         poll_interval_seconds: float = 5,
+        reconcile_retry_delay_seconds: float = _DEFAULT_RECONCILE_RETRY_DELAY,
         status_retry_limit: int = 5,
         effort: str = "auto",
         budget_max_dollars: float | None = 5.0,
@@ -79,6 +82,8 @@ class AgentTaskService:
             raise ValueError("agent_max_concurrent 必须大于 0。")
         if float(poll_interval_seconds) <= 0:
             raise ValueError("agent_poll_interval_seconds 必须大于 0。")
+        if float(reconcile_retry_delay_seconds) <= 0:
+            raise ValueError("reconcile_retry_delay_seconds 必须大于 0。")
         self.archive = archive
         self.client = client
         self._api_keys = tuple(str(key) for key in api_keys if str(key).strip())
@@ -87,6 +92,7 @@ class AgentTaskService:
         self.data_dir = Path(data_dir)
         self.max_concurrency = int(max_concurrency)
         self.poll_interval_seconds = float(poll_interval_seconds)
+        self.reconcile_retry_delay_seconds = float(reconcile_retry_delay_seconds)
         self.status_retry_limit = max(1, int(status_retry_limit))
         self.effort = effort
         self.budget_max_dollars = budget_max_dollars
@@ -383,6 +389,7 @@ class AgentTaskService:
             await self._sleep_or_stop(self.poll_interval_seconds)
 
     async def _reconcile_missing_run(self, task_id: str) -> None:
+        misses = 0
         while not self._stopping:
             try:
                 task = await self.archive.get_task(task_id)
@@ -393,8 +400,18 @@ class AgentTaskService:
                     self._schedule_monitor(task.task_id)
                 return
             try:
-                await self._reconcile_once(task)
-                return
+                remote = await self._find_remote_run(task)
+                if remote is not None:
+                    updated = await self._apply_remote_run(
+                        task.task_id, remote, self._key_for_task(task)
+                    )
+                    if updated.is_active:
+                        self._schedule_monitor(task.task_id)
+                    return
+                misses += 1
+                if misses >= _RECONCILE_MISS_LIMIT:
+                    await self._mark_reconcile_missing(task)
+                    return
             except KeySlotMismatchError as exc:
                 LOGGER.error("核对 Exa Agent 任务 %s 暂停: %s", task.task_id, exc)
                 return
@@ -404,9 +421,20 @@ class AgentTaskService:
                     task.task_id,
                     exc,
                 )
-            await self._sleep_or_stop(max(self.poll_interval_seconds, 10))
+            await self._sleep_or_stop(self.reconcile_retry_delay_seconds)
 
     async def _reconcile_once(self, task: TaskRecord) -> TaskRecord:
+        remote = await self._find_remote_run(task)
+        if remote is not None:
+            updated = await self._apply_remote_run(
+                task.task_id, remote, self._key_for_task(task)
+            )
+            if updated.is_active:
+                self._schedule_monitor(task.task_id)
+            return updated
+        return await self._mark_reconcile_missing(task)
+
+    async def _find_remote_run(self, task: TaskRecord) -> RemoteAgentRun | None:
         api_key = self._key_for_task(task)
         cursor: str | None = None
         for _ in range(_MAX_RECONCILE_PAGES):
@@ -418,24 +446,20 @@ class AgentTaskService:
                         continue
                     if self._remote_task_id(raw_run) != task.task_id:
                         continue
-                    remote = normalize_remote_run(raw_run)
-                    updated = await self._apply_remote_run(
-                        task.task_id, remote, api_key
-                    )
-                    if updated.is_active:
-                        self._schedule_monitor(task.task_id)
-                    return updated
+                    return normalize_remote_run(raw_run)
             next_cursor = page.get("nextCursor") if isinstance(page, dict) else None
             if not page.get("hasMore") or not next_cursor or next_cursor == cursor:
                 break
             cursor = str(next_cursor)
-        updated = await self.archive.update_task(
+        return None
+
+    async def _mark_reconcile_missing(self, task: TaskRecord) -> TaskRecord:
+        return await self.archive.update_task(
             task.task_id,
             status="interrupted",
             error="未找到对应的远端 Agent Run；为避免重复扣费不会自动重建。",
             completed_at=utc_now_iso(),
         )
-        return updated
 
     async def _refresh_active_task(self, task: TaskRecord) -> TaskRecord:
         if not task.run_id:

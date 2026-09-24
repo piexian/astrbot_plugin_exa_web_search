@@ -180,6 +180,36 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task.result_text, "polled")
         self.assertTrue(self.client.get_calls)
 
+    async def test_reconciliation_retries_before_marking_missing_run(self):
+        self.service.reconcile_retry_delay_seconds = 0.001
+        self.client.create_responses.append(
+            ExaAgentAPIError("timeout", outcome_uncertain=True)
+        )
+        self.client.list_responses.extend(
+            [
+                {"data": [], "hasMore": False, "nextCursor": None},
+                lambda client: {
+                    "data": [
+                        {
+                            "id": "agent_run_delayed",
+                            "status": "running",
+                            "request": {"metadata": {"task_id": client.last_task_id}},
+                            "output": {},
+                        }
+                    ],
+                    "hasMore": False,
+                    "nextCursor": None,
+                },
+            ]
+        )
+        self.client.get_responses.append(
+            remote("completed", "agent_run_delayed", text="delayed")
+        )
+        outcome = await self.service.create_task("research")
+        task = await self.wait_for_status(outcome.task.task_id, "completed")
+        self.assertEqual(task.result_text, "delayed")
+        self.assertGreaterEqual(len(self.client.list_calls), 2)
+
     async def test_restart_recovers_existing_run(self):
         task = await self.archive.reserve_task("resume", 1, 2)
         await self.archive.update_task(
