@@ -428,6 +428,7 @@ class AgentTaskService:
                         task_id,
                         error,
                     )
+                    await self.ensure_capacity()
                     return
                 delay = self.notification_retry_delays[attempt]
                 _astrbot_logger().warning(
@@ -443,6 +444,7 @@ class AgentTaskService:
             else:
                 await self.archive.finish_notification(task_id)
                 _astrbot_logger().info("Exa Agent 完成通知已发送: task=%s", task_id)
+                await self.ensure_capacity()
                 return
 
     def _notification_done(self, task_id: str, task: asyncio.Task[None]) -> None:

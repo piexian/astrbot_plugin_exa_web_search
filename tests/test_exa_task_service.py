@@ -5,6 +5,7 @@ import types
 import unittest
 from collections import deque
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from tools.exa_agent import ExaAgentAPIError, RemoteAgentRun
 from tools.exa_task_service import (
@@ -12,7 +13,7 @@ from tools.exa_task_service import (
     KeySlotMismatchError,
     key_fingerprint,
 )
-from tools.exa_tasks import TaskArchive
+from tools.exa_tasks import TaskArchive, TaskNotFoundError
 
 
 def setUpModule():
@@ -149,6 +150,76 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
                 return task
             await asyncio.sleep(0.001)
         self.fail(f"task did not reach {status}")
+
+    async def test_terminal_delivery_enforces_capacity_without_another_command(self):
+        self.archive.max_bytes = 128 * 1024
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                pending = await self.archive.reserve_task(
+                    "protected",
+                    0,
+                    2,
+                    notification_session="platform:GroupMessage:group",
+                )
+                await self.archive.update_task(pending.task_id, status="completed")
+                started = asyncio.Event()
+                release = asyncio.Event()
+                calls = []
+
+                async def send(task, body):
+                    calls.append(task.task_id)
+                    started.set()
+                    await release.wait()
+                    if fail:
+                        raise RuntimeError("send rejected")
+
+                self.service.notification_sender = send
+                self.client.create_responses.append(
+                    remote("completed", text="x" * 512_000)
+                )
+                previous_creates = len(self.client.create_calls)
+                outcome = await self.service.create_task(
+                    "large result", notification_session="platform:GroupMessage:group"
+                )
+                try:
+                    await asyncio.wait_for(started.wait(), timeout=2)
+                    notification = self.service._notifications[outcome.task.task_id]
+                    before = await self.archive.capacity_status()
+                    self.assertGreater(before.percent, 100)
+                finally:
+                    release.set()
+                await asyncio.wait_for(notification, timeout=3)
+
+                after = await self.archive.capacity_status()
+                self.assertLess(after.percent, 100)
+                self.assertEqual(len(calls), 3 if fail else 1)
+                self.assertEqual(len(self.client.create_calls), previous_creates + 1)
+                with self.assertRaises(TaskNotFoundError):
+                    await self.archive.get_task(outcome.task.task_id)
+                protected = await self.archive.get_task(pending.task_id)
+                self.assertEqual(protected.notification_status, "pending")
+
+    async def test_capacity_error_keeps_success_without_resending(self):
+        task = await self.archive.reserve_task(
+            "capacity failure",
+            0,
+            1,
+            notification_session="platform:GroupMessage:group",
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", result={"text": "done"}
+        )
+        self.service.ensure_capacity = AsyncMock(
+            side_effect=RuntimeError("cleanup error")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "cleanup error"):
+            await self.service._notify_task(task.task_id)
+        saved = await self.archive.get_task(task.task_id)
+        self.assertEqual(saved.notification_status, "sent")
+        self.assertEqual(saved.notification_attempts, 1)
+        await self.service._notify_task(task.task_id)
+        self.assertEqual(len(self.notification_calls), 1)
 
     async def test_completed_task_sends_one_result_notification(self):
         self.client.create_responses.append(remote("completed", text="full result"))
