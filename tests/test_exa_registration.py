@@ -634,7 +634,9 @@ class ExaCompletionDeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_ordinary_stats_does_not_send_long_result_file(self):
         task = await self.completed_task("长正文" * 1000)
         self.plugin._task_service = SimpleNamespace(
-            get_task=AsyncMock(return_value=SimpleNamespace(task=task, remote_error="")),
+            get_task=AsyncMock(
+                return_value=SimpleNamespace(task=task, remote_error="")
+            ),
             get_export_task=AsyncMock(),
             capacity_status=AsyncMock(return_value=CapacityStatus(0, 1000)),
             last_cleanup=AsyncMock(return_value=None),

@@ -178,7 +178,9 @@ async def completion_notification_file(
 ) -> AsyncIterator[Path]:
     path = None
     writer = asyncio.create_task(
-        asyncio.to_thread(write_completion_notification_markdown, data_dir, task_id, body)
+        asyncio.to_thread(
+            write_completion_notification_markdown, data_dir, task_id, body
+        )
     )
     try:
         try:
