@@ -375,7 +375,7 @@ class TaskArchive:
         statuses = AUTO_CLEANUP_STATUSES if automatic else MANUAL_CLEANUP_STATUSES
         async with self._lock:
             count, estimated = await asyncio.to_thread(
-                self._cleanup_estimate_sync, statuses
+                self._cleanup_estimate_sync, statuses, automatic=automatic
             )
         capacity = await self.capacity_status()
         return CleanupPreview(count, estimated, capacity)
@@ -736,10 +736,14 @@ class TaskArchive:
         with closing(self._connect()) as connection:
             connection.execute(
                 """
-                UPDATE tasks SET notification_status = ?, notification_error = ?
+                UPDATE tasks SET notification_status = ?, notification_error = ?,
+                    notification_text =
+                        CASE WHEN ? = 'sent' THEN '' ELSE notification_text END,
+                    notification_text_offset =
+                        CASE WHEN ? = 'sent' THEN 0 ELSE notification_text_offset END
                 WHERE task_id = ? AND notification_status = 'sending'
                 """,
-                (status, error, task_id),
+                (status, error, status, status, task_id),
             )
 
     def _search_tasks_sync(self, term: str, limit: int) -> list[TaskRecord]:
@@ -820,11 +824,13 @@ class TaskArchive:
             self._reclaim_sync(connection)
         return TaskRecord.from_row(row)
 
-    def _cleanup_estimate_sync(self, statuses: frozenset[str]) -> tuple[int, int]:
+    def _cleanup_estimate_sync(
+        self, statuses: frozenset[str], *, automatic: bool
+    ) -> tuple[int, int]:
         placeholders = ",".join("?" for _ in statuses)
         notification_filter = (
             " AND notification_status NOT IN ('pending', 'sending')"
-            if statuses == AUTO_CLEANUP_STATUSES
+            if automatic
             else ""
         )
         with closing(self._connect()) as connection:
@@ -839,6 +845,7 @@ class TaskArchive:
                            LENGTH(request_id) + LENGTH(cost_json) + LENGTH(error) +
                            LENGTH(notification_session) + LENGTH(notification_scene) +
                            LENGTH(notification_message_id) +
+                           LENGTH(CAST(notification_text AS BLOB)) +
                            LENGTH(notification_error) + 224
                        ), 0) AS estimated_bytes
                 FROM tasks WHERE status IN ({placeholders}){notification_filter}
@@ -871,6 +878,7 @@ class TaskArchive:
                            LENGTH(request_id) + LENGTH(cost_json) + LENGTH(error) +
                            LENGTH(notification_session) + LENGTH(notification_scene) +
                            LENGTH(notification_message_id) +
+                           LENGTH(CAST(notification_text AS BLOB)) +
                            LENGTH(notification_error) + 224
                            AS estimated_bytes
                     FROM tasks WHERE status IN ({placeholders}){notification_filter}

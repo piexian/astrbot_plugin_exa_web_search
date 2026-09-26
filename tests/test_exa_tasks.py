@@ -133,6 +133,90 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TaskNotFoundError):
             await self.archive.get_task(task.task_id)
 
+    async def test_manual_preview_includes_pending_notification(self):
+        task = await self.archive.reserve_task(
+            "pending", 0, 1, notification_session="platform:GroupMessage:group"
+        )
+        await self.archive.update_task(task.task_id, status="completed")
+
+        manual = await self.archive.preview_cleanup()
+        automatic = await self.archive.preview_cleanup(automatic=True)
+        deleted = await self.archive.cleanup_terminal(automatic=False)
+
+        self.assertEqual(manual.count, 1)
+        self.assertEqual(automatic.count, 0)
+        self.assertEqual(deleted.deleted_task_ids, (task.task_id,))
+
+    async def test_manual_preview_matches_deletion_for_mixed_notification_states(self):
+        terminal_ids = set()
+        for state in ("disabled", "pending", "sending", "sent", "failed"):
+            session = "" if state == "disabled" else "platform:GroupMessage:group"
+            task = await self.archive.reserve_task(
+                state, 0, 1, notification_session=session
+            )
+            await self.archive.update_task(task.task_id, status="completed")
+            if state in ("sending", "sent", "failed"):
+                await self.archive.claim_notification(task.task_id)
+            if state in ("sent", "failed"):
+                await self.archive.finish_notification(
+                    task.task_id, error="failed" if state == "failed" else ""
+                )
+            terminal_ids.add(task.task_id)
+        active = await self.archive.reserve_task("active", 0, 1)
+
+        manual = await self.archive.preview_cleanup()
+        automatic = await self.archive.preview_cleanup(automatic=True)
+        deleted = await self.archive.cleanup_terminal(automatic=False)
+
+        self.assertEqual(manual.count, len(terminal_ids))
+        self.assertEqual(automatic.count, 3)
+        self.assertEqual(set(deleted.deleted_task_ids), terminal_ids)
+        self.assertTrue((await self.archive.get_task(active.task_id)).is_active)
+
+    async def test_snapshot_survives_retry_and_is_cleared_on_success(self):
+        task = await self.archive.reserve_task(
+            "snapshot", 0, 1, notification_session="platform:GroupMessage:group"
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", result={"text": "archive body"}
+        )
+        await self.archive.claim_notification(task.task_id)
+        snapshot = f"{task.task_id}\n\narchive body"
+        await self.archive.begin_notification_text(task.task_id, snapshot)
+        await self.archive.advance_notification_text(task.task_id, 10)
+        await self.archive.finish_notification(task.task_id, error="retry", retry=True)
+
+        pending = await self.archive.get_task(task.task_id)
+        self.assertEqual(pending.notification_text, snapshot)
+        self.assertEqual(pending.notification_text_offset, 10)
+        await self.archive.claim_notification(task.task_id)
+        await self.archive.finish_notification(task.task_id)
+
+        sent = await self.archive.get_task(task.task_id)
+        self.assertEqual(sent.notification_status, "sent")
+        self.assertEqual(sent.notification_text, "")
+        self.assertEqual(sent.notification_text_offset, 0)
+        self.assertEqual(sent.result_text, "archive body")
+
+    async def test_cleanup_estimate_counts_retained_snapshot_bytes(self):
+        task = await self.archive.reserve_task(
+            "snapshot size", 0, 1, notification_session="platform:GroupMessage:group"
+        )
+        await self.archive.update_task(task.task_id, status="completed")
+        await self.archive.claim_notification(task.task_id)
+        before = await self.archive.preview_cleanup()
+        snapshot = "未送达正文" * 1000
+        await self.archive.begin_notification_text(task.task_id, snapshot)
+        after = await self.archive.preview_cleanup()
+
+        self.assertEqual(
+            after.estimated_bytes - before.estimated_bytes, len(snapshot.encode("utf-8"))
+        )
+        await self.archive.finish_notification(task.task_id, error="failed")
+        failed = await self.archive.get_task(task.task_id)
+        self.assertEqual(failed.notification_status, "failed")
+        self.assertEqual(failed.notification_text, snapshot)
+
     async def test_automatic_cleanup_preserves_active_tasks(self):
         small_archive = TaskArchive(
             Path(self.temp_dir.name) / "small.sqlite3", max_size_mb=0.01

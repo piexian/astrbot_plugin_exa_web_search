@@ -504,7 +504,8 @@ class ExaCompletionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("".join(delivered), f"{task.task_id}\n\n{body}")
         saved = await self.archive.get_task(task.task_id)
         self.assertEqual(saved.notification_status, "sent")
-        self.assertEqual(saved.notification_text_offset, len(saved.notification_text))
+        self.assertEqual(saved.notification_text, "")
+        self.assertEqual(saved.notification_text_offset, 0)
         self.assert_no_exports()
         self.client.create_run.assert_not_awaited()
 
