@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import hmac
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,10 @@ class AgentTaskService:
         effort: str = "auto",
         budget_max_dollars: float | None = 5.0,
         archive_event_pages: int = 10,
+        notification_sender: (
+            Callable[[TaskRecord, str], Awaitable[None]] | None
+        ) = None,
+        notification_retry_delays: tuple[float, ...] = (1.0, 5.0),
     ) -> None:
         if not api_keys:
             raise ValueError("至少配置一个 Exa API Key 才能使用 Agent 任务。")
@@ -114,6 +119,11 @@ class AgentTaskService:
         self._source_recovery_tasks: dict[str, asyncio.Task[None]] = {}
         self._stopping = False
         self._started = False
+        self.notification_sender = notification_sender
+        self.notification_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in notification_retry_delays
+        )
+        self._notifications: dict[str, asyncio.Task[None]] = {}
 
     async def start(self) -> None:
         if self._started:
@@ -122,6 +132,8 @@ class AgentTaskService:
         await self.ensure_capacity()
         await asyncio.to_thread(cleanup_exports, self.data_dir)
         self._started = True
+        for task in await self.archive.recover_pending_notifications():
+            self._schedule_notification(task)
         for task in await self.archive.list_active_tasks():
             if task.run_id:
                 self._schedule_monitor(task.task_id)
@@ -133,6 +145,7 @@ class AgentTaskService:
         tasks = [
             *self._monitors.values(),
             *self._source_recovery_tasks.values(),
+            *self._notifications.values(),
         ]
         for task in tasks:
             task.cancel()
@@ -140,8 +153,16 @@ class AgentTaskService:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._monitors.clear()
         self._source_recovery_tasks.clear()
+        self._notifications.clear()
 
-    async def create_task(self, query: str) -> TaskCreationOutcome:
+    async def create_task(
+        self,
+        query: str,
+        *,
+        notification_session: str = "",
+        notification_scene: str = "",
+        notification_message_id: str = "",
+    ) -> TaskCreationOutcome:
         text = str(query or "").strip()
         if not text:
             raise ValueError("Agent 研究问题不能为空。")
@@ -155,6 +176,9 @@ class AgentTaskService:
             key_slot,
             self.max_concurrency,
             key_fingerprint=key_fingerprint(api_key),
+            notification_session=notification_session,
+            notification_scene=notification_scene,
+            notification_message_id=notification_message_id,
         )
         try:
             remote = await self.client.create_run(
@@ -185,6 +209,7 @@ class AgentTaskService:
                     completed_at=utc_now_iso(),
                 )
                 warning = "任务创建失败，已写入本地归档。"
+            self._schedule_notification(task)
             await self.ensure_capacity()
             return TaskCreationOutcome(task, warning)
         task = await self._apply_remote_run(task.task_id, remote, api_key)
@@ -350,6 +375,92 @@ class AgentTaskService:
         self._monitors[task_id] = task
         task.add_done_callback(lambda done, tid=task_id: self._monitor_done(tid, done))
 
+    def _schedule_notification(self, task: TaskRecord) -> None:
+        if (
+            self.notification_sender is None
+            or self._stopping
+            or not task.notification_session
+            or task.notification_status != "pending"
+            or task.status not in TERMINAL_STATUSES
+        ):
+            return
+        existing = self._notifications.get(task.task_id)
+        if existing and not existing.done():
+            return
+        notification = asyncio.create_task(
+            self._notify_task(task.task_id),
+            name=f"exa-agent-notification-{task.task_id}",
+        )
+        self._notifications[task.task_id] = notification
+        notification.add_done_callback(
+            lambda done, tid=task.task_id: self._notification_done(tid, done)
+        )
+
+    async def _notify_task(self, task_id: str) -> None:
+        if self.notification_sender is None:
+            return
+        for attempt in range(len(self.notification_retry_delays) + 1):
+            task = await self.archive.claim_notification(task_id)
+            if task is None:
+                return
+            if task.status == "completed":
+                body = task.result_text or task.result_summary
+                if not body:
+                    body = "任务已完成，但没有返回正文。"
+            else:
+                body = task.error or {
+                    "cancelled": "任务已取消。",
+                    "interrupted": "任务已中断。",
+                }.get(task.status, "任务未能完成。")
+            try:
+                await self.notification_sender(task, body)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {str(exc)[:500]}"
+                retry = attempt < len(self.notification_retry_delays)
+                await self.archive.finish_notification(
+                    task_id, error=error, retry=retry
+                )
+                if not retry:
+                    _astrbot_logger().error(
+                        "Exa Agent 完成通知发送失败: task=%s error=%s",
+                        task_id,
+                        error,
+                    )
+                    await self.ensure_capacity()
+                    return
+                delay = self.notification_retry_delays[attempt]
+                _astrbot_logger().warning(
+                    "Exa Agent 完成通知发送失败，将重试: task=%s attempt=%s/%s",
+                    task_id,
+                    attempt + 1,
+                    len(self.notification_retry_delays) + 1,
+                )
+                if delay:
+                    await self._sleep_or_stop(delay)
+                if self._stopping:
+                    return
+            else:
+                await self.archive.finish_notification(task_id)
+                _astrbot_logger().info("Exa Agent 完成通知已发送: task=%s", task_id)
+                await self.ensure_capacity()
+                return
+
+    def _notification_done(self, task_id: str, task: asyncio.Task[None]) -> None:
+        if self._notifications.get(task_id) is task:
+            self._notifications.pop(task_id, None)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            return
+        if error:
+            _astrbot_logger().error(
+                "Exa Agent 完成通知任务 %s 异常: %s", task_id, error
+            )
+
     def _schedule_source_recovery(
         self, task_id: str, run_id: str, api_key: str
     ) -> None:
@@ -447,12 +558,13 @@ class AgentTaskService:
                 if exc.status == 404:
                     not_found_count += 1
                     if not_found_count >= 3:
-                        await self.archive.update_task(
+                        task = await self.archive.update_task(
                             task.task_id,
                             status="interrupted",
                             error="远端任务不存在或已过期。",
                             completed_at=utc_now_iso(),
                         )
+                        self._schedule_notification(task)
                         return
                 else:
                     not_found_count = 0
@@ -540,12 +652,14 @@ class AgentTaskService:
         return None
 
     async def _mark_reconcile_missing(self, task: TaskRecord) -> TaskRecord:
-        return await self.archive.update_task(
+        task = await self.archive.update_task(
             task.task_id,
             status="interrupted",
             error="未找到对应的远端 Agent Run；为避免重复扣费不会自动重建。",
             completed_at=utc_now_iso(),
         )
+        self._schedule_notification(task)
+        return task
 
     async def _refresh_active_task(self, task: TaskRecord) -> TaskRecord:
         if not task.run_id:
@@ -611,6 +725,7 @@ class AgentTaskService:
         if remote.request_id:
             update["request_id"] = remote.request_id
         updated = await self.archive.update_task(task_id, **update)
+        self._schedule_notification(updated)
         if source_recovery_needed and not sources:
             self._schedule_source_recovery(task_id, remote.run_id, api_key)
         return updated

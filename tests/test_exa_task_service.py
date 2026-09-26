@@ -5,6 +5,7 @@ import types
 import unittest
 from collections import deque
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from tools.exa_agent import ExaAgentAPIError, RemoteAgentRun
 from tools.exa_task_service import (
@@ -12,7 +13,7 @@ from tools.exa_task_service import (
     KeySlotMismatchError,
     key_fingerprint,
 )
-from tools.exa_tasks import TaskArchive
+from tools.exa_tasks import TaskArchive, TaskNotFoundError
 
 
 def setUpModule():
@@ -113,6 +114,7 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         data_dir = Path(self.temp_dir.name)
         self.archive = TaskArchive(data_dir / "tasks.sqlite3", max_size_mb=10)
         self.client = FakeAgentClient()
+        self.notification_calls = []
         self.service = AgentTaskService(
             archive=self.archive,
             client=self.client,
@@ -121,8 +123,21 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
             max_concurrency=2,
             poll_interval_seconds=0.001,
             status_retry_limit=2,
+            notification_sender=self.capture_notification,
+            notification_retry_delays=(0, 0),
         )
         await self.service.start()
+
+    async def capture_notification(self, task, body):
+        self.notification_calls.append((task.task_id, task.notification_session, body))
+
+    async def wait_for_notification(self, task_id, status):
+        for _ in range(200):
+            task = await self.archive.get_task(task_id)
+            if task.notification_status == status:
+                return task
+            await asyncio.sleep(0.001)
+        self.fail(f"notification did not reach {status}")
 
     async def asyncTearDown(self):
         await self.service.shutdown()
@@ -135,6 +150,147 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
                 return task
             await asyncio.sleep(0.001)
         self.fail(f"task did not reach {status}")
+
+    async def test_terminal_delivery_enforces_capacity_without_another_command(self):
+        self.archive.max_bytes = 128 * 1024
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                pending = await self.archive.reserve_task(
+                    "protected",
+                    0,
+                    2,
+                    notification_session="platform:GroupMessage:group",
+                )
+                await self.archive.update_task(pending.task_id, status="completed")
+                started = asyncio.Event()
+                release = asyncio.Event()
+                calls = []
+
+                async def send(task, body):
+                    calls.append(task.task_id)
+                    started.set()
+                    await release.wait()
+                    if fail:
+                        raise RuntimeError("send rejected")
+
+                self.service.notification_sender = send
+                self.client.create_responses.append(
+                    remote("completed", text="x" * 512_000)
+                )
+                previous_creates = len(self.client.create_calls)
+                outcome = await self.service.create_task(
+                    "large result", notification_session="platform:GroupMessage:group"
+                )
+                try:
+                    await asyncio.wait_for(started.wait(), timeout=2)
+                    notification = self.service._notifications[outcome.task.task_id]
+                    before = await self.archive.capacity_status()
+                    self.assertGreater(before.percent, 100)
+                finally:
+                    release.set()
+                await asyncio.wait_for(notification, timeout=3)
+
+                after = await self.archive.capacity_status()
+                self.assertLess(after.percent, 100)
+                self.assertEqual(len(calls), 3 if fail else 1)
+                self.assertEqual(len(self.client.create_calls), previous_creates + 1)
+                with self.assertRaises(TaskNotFoundError):
+                    await self.archive.get_task(outcome.task.task_id)
+                protected = await self.archive.get_task(pending.task_id)
+                self.assertEqual(protected.notification_status, "pending")
+
+    async def test_capacity_error_keeps_success_without_resending(self):
+        task = await self.archive.reserve_task(
+            "capacity failure",
+            0,
+            1,
+            notification_session="platform:GroupMessage:group",
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", result={"text": "done"}
+        )
+        self.service.ensure_capacity = AsyncMock(
+            side_effect=RuntimeError("cleanup error")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "cleanup error"):
+            await self.service._notify_task(task.task_id)
+        saved = await self.archive.get_task(task.task_id)
+        self.assertEqual(saved.notification_status, "sent")
+        self.assertEqual(saved.notification_attempts, 1)
+        await self.service._notify_task(task.task_id)
+        self.assertEqual(len(self.notification_calls), 1)
+
+    async def test_completed_task_sends_one_result_notification(self):
+        self.client.create_responses.append(remote("completed", text="full result"))
+        outcome = await self.service.create_task(
+            "research",
+            notification_session="qq_official:GroupMessage:group-1",
+            notification_scene="group",
+        )
+
+        sent = await self.wait_for_notification(outcome.task.task_id, "sent")
+        self.assertEqual(sent.notification_attempts, 1)
+        expected = (
+            outcome.task.task_id,
+            "qq_official:GroupMessage:group-1",
+            "full result",
+        )
+        self.assertEqual(self.notification_calls, [expected])
+        await self.service.get_task(outcome.task.task_id)
+        self.assertEqual(len(self.notification_calls), 1)
+
+    async def test_pending_completion_notification_recovers_after_restart(self):
+        task = await self.archive.reserve_task(
+            "restart delivery",
+            0,
+            2,
+            notification_session="qq_official:GroupMessage:group-2",
+            notification_scene="group",
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", result={"text": "recovered result"}
+        )
+        await self.service.shutdown()
+
+        self.service = AgentTaskService(
+            archive=self.archive,
+            client=self.client,
+            api_keys=["key-zero", "key-one"],
+            data_dir=self.temp_dir.name,
+            notification_sender=self.capture_notification,
+            notification_retry_delays=(0, 0),
+        )
+        await self.service.start()
+
+        restored = await self.wait_for_notification(task.task_id, "sent")
+        self.assertEqual(restored.notification_attempts, 1)
+        expected = (
+            task.task_id,
+            "qq_official:GroupMessage:group-2",
+            "recovered result",
+        )
+        self.assertEqual(self.notification_calls, [expected])
+
+    async def test_failed_notification_retries_without_recreating_agent_run(self):
+        attempts = []
+
+        async def fail_once(task, body):
+            attempts.append((task.task_id, body))
+            if len(attempts) == 1:
+                raise RuntimeError("temporary send failure")
+
+        self.service.notification_sender = fail_once
+        self.client.create_responses.append(remote("completed", text="done"))
+        outcome = await self.service.create_task(
+            "research",
+            notification_session="qq_official:FriendMessage:user-1",
+        )
+
+        sent = await self.wait_for_notification(outcome.task.task_id, "sent")
+        self.assertEqual(sent.notification_attempts, 2)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(len(self.client.create_calls), 1)
 
     async def test_create_and_poll_reuse_the_same_key_slot(self):
         self.client.create_responses.append(remote("running"))

@@ -133,6 +133,91 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TaskNotFoundError):
             await self.archive.get_task(task.task_id)
 
+    async def test_manual_preview_includes_pending_notification(self):
+        task = await self.archive.reserve_task(
+            "pending", 0, 1, notification_session="platform:GroupMessage:group"
+        )
+        await self.archive.update_task(task.task_id, status="completed")
+
+        manual = await self.archive.preview_cleanup()
+        automatic = await self.archive.preview_cleanup(automatic=True)
+        deleted = await self.archive.cleanup_terminal(automatic=False)
+
+        self.assertEqual(manual.count, 1)
+        self.assertEqual(automatic.count, 0)
+        self.assertEqual(deleted.deleted_task_ids, (task.task_id,))
+
+    async def test_manual_preview_matches_deletion_for_mixed_notification_states(self):
+        terminal_ids = set()
+        for state in ("disabled", "pending", "sending", "sent", "failed"):
+            session = "" if state == "disabled" else "platform:GroupMessage:group"
+            task = await self.archive.reserve_task(
+                state, 0, 1, notification_session=session
+            )
+            await self.archive.update_task(task.task_id, status="completed")
+            if state in ("sending", "sent", "failed"):
+                await self.archive.claim_notification(task.task_id)
+            if state in ("sent", "failed"):
+                await self.archive.finish_notification(
+                    task.task_id, error="failed" if state == "failed" else ""
+                )
+            terminal_ids.add(task.task_id)
+        active = await self.archive.reserve_task("active", 0, 1)
+
+        manual = await self.archive.preview_cleanup()
+        automatic = await self.archive.preview_cleanup(automatic=True)
+        deleted = await self.archive.cleanup_terminal(automatic=False)
+
+        self.assertEqual(manual.count, len(terminal_ids))
+        self.assertEqual(automatic.count, 3)
+        self.assertEqual(set(deleted.deleted_task_ids), terminal_ids)
+        self.assertTrue((await self.archive.get_task(active.task_id)).is_active)
+
+    async def test_snapshot_survives_retry_and_is_cleared_on_success(self):
+        task = await self.archive.reserve_task(
+            "snapshot", 0, 1, notification_session="platform:GroupMessage:group"
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", result={"text": "archive body"}
+        )
+        await self.archive.claim_notification(task.task_id)
+        snapshot = f"{task.task_id}\n\narchive body"
+        await self.archive.begin_notification_text(task.task_id, snapshot)
+        await self.archive.advance_notification_text(task.task_id, 10)
+        await self.archive.finish_notification(task.task_id, error="retry", retry=True)
+
+        pending = await self.archive.get_task(task.task_id)
+        self.assertEqual(pending.notification_text, snapshot)
+        self.assertEqual(pending.notification_text_offset, 10)
+        await self.archive.claim_notification(task.task_id)
+        await self.archive.finish_notification(task.task_id)
+
+        sent = await self.archive.get_task(task.task_id)
+        self.assertEqual(sent.notification_status, "sent")
+        self.assertEqual(sent.notification_text, "")
+        self.assertEqual(sent.notification_text_offset, 0)
+        self.assertEqual(sent.result_text, "archive body")
+
+    async def test_cleanup_estimate_counts_retained_snapshot_bytes(self):
+        task = await self.archive.reserve_task(
+            "snapshot size", 0, 1, notification_session="platform:GroupMessage:group"
+        )
+        await self.archive.update_task(task.task_id, status="completed")
+        await self.archive.claim_notification(task.task_id)
+        before = await self.archive.preview_cleanup()
+        snapshot = "未送达正文" * 1000
+        await self.archive.begin_notification_text(task.task_id, snapshot)
+        after = await self.archive.preview_cleanup()
+
+        self.assertEqual(
+            after.estimated_bytes - before.estimated_bytes,
+            len(snapshot.encode("utf-8")),
+        )
+        await self.archive.finish_notification(task.task_id, error="failed")
+        failed = await self.archive.get_task(task.task_id)
+        self.assertEqual(failed.notification_status, "failed")
+        self.assertEqual(failed.notification_text, snapshot)
+
     async def test_automatic_cleanup_preserves_active_tasks(self):
         small_archive = TaskArchive(
             Path(self.temp_dir.name) / "small.sqlite3", max_size_mb=0.01
@@ -162,6 +247,122 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (await small_archive.get_task(running.task_id)).status, "running"
         )
+
+    async def test_notification_outbox_recovers_and_claims_once(self):
+        task = await self.archive.reserve_task(
+            "notify",
+            0,
+            1,
+            notification_session="qq_official:GroupMessage:group-1",
+            notification_scene="group",
+            notification_message_id="msg-1",
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", result={"text": "full result"}
+        )
+        pending = await self.archive.recover_pending_notifications()
+        self.assertEqual([item.task_id for item in pending], [task.task_id])
+
+        first_claim = await self.archive.claim_notification(task.task_id)
+        self.assertEqual(first_claim.notification_status, "sending")
+        self.assertEqual(first_claim.notification_attempts, 1)
+        self.assertIsNone(await self.archive.claim_notification(task.task_id))
+
+        recovered = await self.archive.recover_pending_notifications()
+        self.assertEqual(recovered[0].notification_status, "pending")
+        second_claim = await self.archive.claim_notification(task.task_id)
+        self.assertEqual(second_claim.notification_attempts, 2)
+        await self.archive.finish_notification(task.task_id)
+
+        sent = await self.archive.get_task(task.task_id)
+        self.assertEqual(sent.notification_status, "sent")
+        self.assertEqual(sent.notification_session, "qq_official:GroupMessage:group-1")
+        self.assertEqual(sent.notification_scene, "group")
+        self.assertEqual(sent.notification_message_id, "msg-1")
+
+    async def test_automatic_cleanup_preserves_pending_notification(self):
+        small_archive = TaskArchive(
+            Path(self.temp_dir.name) / "pending.sqlite3", max_size_mb=0.001
+        )
+        await small_archive.initialize()
+        task = await small_archive.reserve_task(
+            "pending delivery",
+            0,
+            1,
+            notification_session="qq_official:GroupMessage:group-1",
+        )
+        await small_archive.update_task(
+            task.task_id,
+            status="completed",
+            result={"text": "x" * 20_000},
+        )
+
+        result = await small_archive.cleanup_terminal(automatic=True)
+
+        self.assertNotIn(task.task_id, result.deleted_task_ids)
+        self.assertEqual(
+            (await small_archive.get_task(task.task_id)).notification_status,
+            "pending",
+        )
+
+    async def test_migration_preserves_existing_notification_delivery_state(self):
+        task = await self.archive.reserve_task(
+            "v3 notification", 0, 1, notification_session="platform:GroupMessage:group"
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", result={"text": "original result"}
+        )
+        await self.archive.claim_notification(task.task_id)
+        with sqlite3.connect(self.archive.db_path) as connection:
+            connection.execute("ALTER TABLE tasks DROP COLUMN notification_text")
+            connection.execute("ALTER TABLE tasks DROP COLUMN notification_text_offset")
+            connection.execute("PRAGMA user_version=3")
+
+        migrated = TaskArchive(self.archive.db_path, max_size_mb=10)
+        await migrated.initialize()
+        restored = await migrated.get_task(task.task_id)
+        self.assertEqual(restored.notification_status, "sending")
+        self.assertEqual(restored.notification_attempts, 1)
+        self.assertEqual(restored.result_text, "original result")
+        self.assertEqual(restored.notification_text, "")
+        self.assertEqual(restored.notification_text_offset, 0)
+
+    async def test_initialization_migrates_existing_archive_schema(self):
+        old_path = Path(self.temp_dir.name) / "legacy.sqlite3"
+        with sqlite3.connect(old_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE tasks (
+                    task_id TEXT PRIMARY KEY, run_id TEXT, key_slot INTEGER NOT NULL,
+                    key_fingerprint TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+                    query TEXT NOT NULL, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, completed_at TEXT,
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    sources_json TEXT NOT NULL DEFAULT '[]',
+                    request_id TEXT NOT NULL DEFAULT '',
+                    cost_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO tasks (task_id, key_slot, status, query, created_at, updated_at)
+                VALUES ('r-20260924-0001', 0, 'completed', 'legacy', 'created', 'updated')
+                """
+            )
+
+        migrated = TaskArchive(old_path, max_size_mb=10)
+        await migrated.initialize()
+        restored = await migrated.get_task("r-20260924-0001")
+
+        self.assertEqual(restored.query, "legacy")
+        self.assertEqual(restored.notification_status, "disabled")
+        self.assertEqual(restored.notification_session, "")
+        self.assertEqual(restored.notification_text, "")
+        self.assertEqual(restored.notification_text_offset, 0)
+        with sqlite3.connect(old_path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
 
 
 if __name__ == "__main__":
