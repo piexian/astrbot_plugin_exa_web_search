@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -149,6 +152,50 @@ def render_completion_notification(task_id: str, body: str) -> str:
     return f"{task_id}\n\n{body}"
 
 
+def notification_text_chunks(text: str, offset: int = 0) -> Iterator[str]:
+    while offset < len(text):
+        end = min(offset + AUTO_NOTIFICATION_TEXT_LIMIT, len(text))
+        if end < len(text):
+            boundary = text.rfind("\n", offset + AUTO_NOTIFICATION_TEXT_LIMIT // 2, end)
+            if boundary >= 0:
+                end = boundary + 1
+        yield text[offset:end]
+        offset = end
+
+
+def _remove_completion_file(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        from astrbot.api import logger
+
+        logger.warning("Exa Agent 临时文件清理失败: file=%s error=%s", path.name, exc)
+
+
+@asynccontextmanager
+async def completion_notification_file(
+    data_dir: str | Path, task_id: str, body: str
+) -> AsyncIterator[Path]:
+    path = None
+    writer = asyncio.create_task(
+        asyncio.to_thread(write_completion_notification_markdown, data_dir, task_id, body)
+    )
+    try:
+        try:
+            path = await asyncio.shield(writer)
+        except asyncio.CancelledError:
+            # 等待后台写入结束，避免清理后文件又被线程创建。
+            try:
+                path = await writer
+            except Exception:
+                pass
+            raise
+        yield path
+    finally:
+        if path is not None:
+            await asyncio.to_thread(_remove_completion_file, path)
+
+
 def write_completion_notification_markdown(
     data_dir: str | Path, task_id: str, body: str
 ) -> Path:
@@ -156,9 +203,13 @@ def write_completion_notification_markdown(
     export_dir.mkdir(parents=True, exist_ok=True)
     safe_task_id = re.sub(r"[^A-Za-z0-9_.-]", "_", task_id)
     path = export_dir / f"{safe_task_id}.md"
-    path.write_text(
-        render_completion_notification(task_id, body) + "\n", encoding="utf-8"
-    )
+    try:
+        path.write_text(
+            render_completion_notification(task_id, body) + "\n", encoding="utf-8"
+        )
+    except Exception:
+        _remove_completion_file(path)
+        raise
     return path
 
 

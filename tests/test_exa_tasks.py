@@ -220,6 +220,28 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
             "pending",
         )
 
+    async def test_migration_preserves_existing_notification_delivery_state(self):
+        task = await self.archive.reserve_task(
+            "v3 notification", 0, 1, notification_session="platform:GroupMessage:group"
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", result={"text": "original result"}
+        )
+        await self.archive.claim_notification(task.task_id)
+        with sqlite3.connect(self.archive.db_path) as connection:
+            connection.execute("ALTER TABLE tasks DROP COLUMN notification_text")
+            connection.execute("ALTER TABLE tasks DROP COLUMN notification_text_offset")
+            connection.execute("PRAGMA user_version=3")
+
+        migrated = TaskArchive(self.archive.db_path, max_size_mb=10)
+        await migrated.initialize()
+        restored = await migrated.get_task(task.task_id)
+        self.assertEqual(restored.notification_status, "sending")
+        self.assertEqual(restored.notification_attempts, 1)
+        self.assertEqual(restored.result_text, "original result")
+        self.assertEqual(restored.notification_text, "")
+        self.assertEqual(restored.notification_text_offset, 0)
+
     async def test_initialization_migrates_existing_archive_schema(self):
         old_path = Path(self.temp_dir.name) / "legacy.sqlite3"
         with sqlite3.connect(old_path) as connection:
@@ -252,8 +274,10 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored.query, "legacy")
         self.assertEqual(restored.notification_status, "disabled")
         self.assertEqual(restored.notification_session, "")
+        self.assertEqual(restored.notification_text, "")
+        self.assertEqual(restored.notification_text_offset, 0)
         with sqlite3.connect(old_path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
 
 
 if __name__ == "__main__":

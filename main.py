@@ -3,6 +3,7 @@ import json
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from functools import partial
 from urllib.parse import urlparse
 
 import aiohttp
@@ -30,12 +31,13 @@ from .tools.exa_content import build_contents_payload
 from .tools.exa_context import build_context_payload
 from .tools.exa_files import (
     AUTO_NOTIFICATION_TEXT_LIMIT,
+    completion_notification_file,
     format_bytes,
+    notification_text_chunks,
     render_completion_notification,
     render_task_list,
     render_task_markdown,
     render_task_stats,
-    write_completion_notification_markdown,
 )
 from .tools.exa_response import normalize_cost_total
 from .tools.exa_search import (
@@ -262,20 +264,54 @@ class ExaWebSearchPlugin(Star):
         )
 
     async def _send_agent_completion_notification(
-        self, task: TaskRecord, body: str
+        self, task: TaskRecord, body: str, *, archive: TaskArchive
     ) -> None:
         message = render_completion_notification(task.task_id, body)
-        if len(message) <= AUTO_NOTIFICATION_TEXT_LIMIT:
-            chain = MessageChain([Comp.Plain(text=message)])
-        else:
-            path = await asyncio.to_thread(
-                write_completion_notification_markdown,
-                StarTools.get_data_dir(),
-                task.task_id,
-                body,
+        if task.notification_text:
+            message = task.notification_text
+        elif len(message) <= AUTO_NOTIFICATION_TEXT_LIMIT:
+            await self._send_agent_notification_chain(
+                task, MessageChain([Comp.Plain(text=message)])
             )
-            chain = MessageChain([Comp.File(name=path.name, file=str(path))])
+            return
+        else:
+            try:
+                async with completion_notification_file(
+                    StarTools.get_data_dir(), task.task_id, body
+                ) as path:
+                    await self._send_agent_notification_chain(
+                        task, MessageChain([Comp.File(name=path.name, file=str(path))])
+                    )
+            except (
+                TimeoutError,
+                asyncio.TimeoutError,
+                ConnectionError,
+                aiohttp.ClientConnectionError,
+            ):
+                # 网络结果不确定时交给通知重试，避免立即另发一份正文。
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Exa Agent 完成文件发送失败，降级为分段正文: task=%s error=%s",
+                    task.task_id,
+                    type(exc).__name__,
+                )
+                task = await archive.begin_notification_text(task.task_id, message)
+                message = task.notification_text
+            else:
+                return
 
+        offset = task.notification_text_offset
+        for chunk in notification_text_chunks(message, offset):
+            await self._send_agent_notification_chain(
+                task, MessageChain([Comp.Plain(text=chunk)])
+            )
+            offset += len(chunk)
+            await archive.advance_notification_text(task.task_id, offset)
+
+    async def _send_agent_notification_chain(
+        self, task: TaskRecord, chain: MessageChain
+    ) -> None:
         platform_id, _, session_id = task.notification_session.split(":", 2)
         platform_manager = getattr(self.context, "platform_manager", None)
         for platform in getattr(platform_manager, "platform_insts", []):
@@ -356,8 +392,9 @@ class ExaWebSearchPlugin(Star):
                         ),
                     ),
                 )
+                archive = TaskArchive(data_dir / "exa_tasks.sqlite3", archive_max_mb)
                 service = AgentTaskService(
-                    archive=TaskArchive(data_dir / "exa_tasks.sqlite3", archive_max_mb),
+                    archive=archive,
                     client=client,
                     api_keys=keys,
                     data_dir=data_dir,
@@ -381,7 +418,9 @@ class ExaWebSearchPlugin(Star):
                     ),
                     effort=effort,
                     budget_max_dollars=budget,
-                    notification_sender=self._send_agent_completion_notification,
+                    notification_sender=partial(
+                        self._send_agent_completion_notification, archive=archive
+                    ),
                 )
                 await service.start()
                 self._task_service = service

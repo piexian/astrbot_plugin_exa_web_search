@@ -2,10 +2,12 @@ import asyncio
 import importlib
 import inspect
 import sys
+import tempfile
 import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -136,6 +138,7 @@ def _install_stubs():
         ClientSession=type("ClientSession", (), {"closed": False}),
         ClientTimeout=type("ClientTimeout", (), {"__init__": lambda self, **_: None}),
         ClientError=type("ClientError", (Exception,), {}),
+        ClientConnectionError=type("ClientConnectionError", (ConnectionError,), {}),
     )
     astrbot = _module("astrbot")
     astrbot.__path__ = []
@@ -374,6 +377,278 @@ class ExaCleanConfirmationTests(unittest.IsolatedAsyncioTestCase):
         second = await anext(responses)
         self.assertIn("确认清理", first.text)
         self.assertIn("超时", second.text)
+
+
+class ExaCompletionDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        _install_stubs()
+        cls.module = importlib.import_module(MODULE_NAME)
+
+    async def asyncSetUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.data_dir = Path(self.temp_dir.name)
+        data_patch = patch.object(
+            self.module.StarTools, "get_data_dir", return_value=self.data_dir
+        )
+        data_patch.start()
+        self.addCleanup(data_patch.stop)
+        self.context = FakeContext()
+        self.context.send_message = AsyncMock(return_value=True)
+        self.plugin = self.module.ExaWebSearchPlugin(self.context, {})
+        self.archive = self.module.TaskArchive(self.data_dir / "tasks.sqlite3", 10)
+        await self.archive.initialize()
+        self.client = SimpleNamespace(create_run=AsyncMock())
+        self.service = self.make_service(self.archive)
+
+    def make_service(self, archive):
+        service = self.module.AgentTaskService(
+            archive=archive,
+            client=self.client,
+            api_keys=["mock-key"],
+            data_dir=self.data_dir,
+            notification_sender=partial(
+                self.plugin._send_agent_completion_notification, archive=archive
+            ),
+            notification_retry_delays=(0, 0),
+        )
+        self.addAsyncCleanup(service.shutdown)
+        return service
+
+    async def completed_task(self, body):
+        task = await self.archive.reserve_task(
+            "private query",
+            0,
+            2,
+            notification_session="qq_official:GroupMessage:group-1",
+            notification_scene="group",
+            notification_message_id="original-message",
+        )
+        return await self.archive.update_task(
+            task.task_id, status="completed", result={"text": body}
+        )
+
+    def assert_no_exports(self):
+        self.assertEqual(list((self.data_dir / "exports").glob("*.md")), [])
+
+    async def test_short_completion_is_only_task_id_and_body(self):
+        task = await self.completed_task("完整正文")
+        platform = SimpleNamespace(
+            meta=lambda: SimpleNamespace(id="qq_official"),
+            remember_session_scene=lambda *_: None,
+            remember_session_message_id=lambda *_: None,
+        )
+        self.context.platform_manager = SimpleNamespace(platform_insts=[platform])
+
+        await self.service._notify_task(task.task_id)
+
+        args = self.context.send_message.await_args.args
+        self.assertEqual(args[0], task.notification_session)
+        self.assertEqual(args[1].chain[0].text, f"{task.task_id}\n\n完整正文")
+        self.assertEqual(self.context.send_message.await_count, 1)
+        saved = await self.archive.get_task(task.task_id)
+        self.assertEqual(saved.notification_status, "sent")
+        self.assert_no_exports()
+
+    async def test_text_limit_and_long_file_lifetime(self):
+        task = await self.completed_task("placeholder")
+        body = "字" * (1500 - len(task.task_id) - 2)
+        await self.archive.update_task(task.task_id, result={"text": body})
+        await self.service._notify_task(task.task_id)
+        component = self.context.send_message.await_args.args[1].chain[0]
+        self.assertIsInstance(component, FakePlain)
+        self.assert_no_exports()
+
+        body += "字"
+        task = await self.completed_task(body)
+        paths = []
+
+        async def accept_file(_origin, chain):
+            component = chain.chain[0]
+            self.assertIsInstance(component, FakeFile)
+            path = Path(component.file)
+            self.assertEqual(component.name, f"{task.task_id}.md")
+            content = path.read_text(encoding="utf-8")
+            self.assertEqual(content, f"{task.task_id}\n\n{body}\n")
+            paths.append(path)
+            return True
+
+        self.context.send_message.side_effect = accept_file
+        await self.service._notify_task(task.task_id)
+        self.assertEqual(len(paths), 1)
+        self.assertFalse(paths[0].exists())
+        saved = await self.archive.get_task(task.task_id)
+        self.assertEqual(saved.notification_status, "sent")
+
+    async def test_file_rejection_falls_back_to_complete_bounded_text(self):
+        body = ("中文正文与链接 https://example.com/article\n\n" * 100) + "最后一段"
+        task = await self.completed_task(body)
+        delivered = []
+        files = []
+
+        async def reject_file(_origin, chain):
+            component = chain.chain[0]
+            if isinstance(component, FakeFile):
+                files.append(component.name)
+                self.assertTrue(Path(component.file).exists())
+                raise NotImplementedError("files are unsupported")
+            delivered.append(component.text)
+            return True
+
+        self.context.send_message.side_effect = reject_file
+        await self.service._notify_task(task.task_id)
+
+        self.assertEqual(files, [f"{task.task_id}.md"])
+        self.assertTrue(all(0 < len(chunk) <= 1500 for chunk in delivered))
+        self.assertEqual("".join(delivered), f"{task.task_id}\n\n{body}")
+        saved = await self.archive.get_task(task.task_id)
+        self.assertEqual(saved.notification_status, "sent")
+        self.assertEqual(saved.notification_text_offset, len(saved.notification_text))
+        self.assert_no_exports()
+        self.client.create_run.assert_not_awaited()
+
+    async def test_text_retries_resume_without_resending_file_or_delivered_chunks(self):
+        for fail_at in (0, 1):
+            with self.subTest(fail_at=fail_at):
+                task = await self.completed_task("结果正文" * 1000)
+                delivered = []
+                file_calls = []
+                failed = False
+
+                async def fail_one_chunk(_origin, chain):
+                    nonlocal failed
+                    component = chain.chain[0]
+                    if isinstance(component, FakeFile):
+                        file_calls.append(component.name)
+                        raise NotImplementedError("files are unsupported")
+                    if len(delivered) == fail_at and not failed:
+                        failed = True
+                        raise RuntimeError("text send rejected")
+                    delivered.append(component.text)
+                    return True
+
+                self.context.send_message.side_effect = fail_one_chunk
+                await self.service._notify_task(task.task_id)
+
+                saved = await self.archive.get_task(task.task_id)
+                self.assertEqual(saved.notification_status, "sent")
+                self.assertEqual(saved.notification_attempts, 2)
+                self.assertEqual(len(file_calls), 1)
+                expected = f"{task.task_id}\n\n{task.result_text}"
+                self.assertEqual("".join(delivered), expected)
+                self.assert_no_exports()
+
+    async def test_restart_resumes_snapshot_after_partial_delivery(self):
+        task = await self.completed_task("原始正文" * 1000)
+        delivered = []
+
+        async def interrupt_second_chunk(_origin, chain):
+            component = chain.chain[0]
+            if isinstance(component, FakeFile):
+                raise NotImplementedError("files are unsupported")
+            if delivered:
+                raise asyncio.CancelledError
+            delivered.append(component.text)
+            return True
+
+        self.context.send_message.side_effect = interrupt_second_chunk
+        with self.assertRaises(asyncio.CancelledError):
+            await self.service._notify_task(task.task_id)
+        saved = await self.archive.get_task(task.task_id)
+        self.assertEqual(saved.notification_status, "sending")
+        self.assertEqual(saved.notification_text_offset, len(delivered[0]))
+        await self.service.shutdown()
+        await self.archive.update_task(task.task_id, result={"text": "later result"})
+
+        async def accept_remaining(_origin, chain):
+            self.assertIsInstance(chain.chain[0], FakePlain)
+            delivered.append(chain.chain[0].text)
+            return True
+
+        self.context.send_message.side_effect = accept_remaining
+        restored_archive = self.module.TaskArchive(self.archive.db_path, 10)
+        restored_service = self.make_service(restored_archive)
+        await restored_service.start()
+        await asyncio.gather(*restored_service._notifications.values())
+
+        restored = await restored_archive.get_task(task.task_id)
+        self.assertEqual(restored.notification_status, "sent")
+        self.assertEqual(restored.notification_attempts, 2)
+        self.assertEqual("".join(delivered), f"{task.task_id}\n\n{task.result_text}")
+        self.assert_no_exports()
+
+    async def test_file_timeout_retries_file_without_text_fallback(self):
+        task = await self.completed_task("长正文" * 1000)
+        paths = []
+
+        async def timeout_once(_origin, chain):
+            component = chain.chain[0]
+            self.assertIsInstance(component, FakeFile)
+            path = Path(component.file)
+            self.assertTrue(path.exists())
+            paths.append(path)
+            if len(paths) == 1:
+                raise TimeoutError("delivery outcome unknown")
+            return True
+
+        self.context.send_message.side_effect = timeout_once
+        await self.service._notify_task(task.task_id)
+        saved = await self.archive.get_task(task.task_id)
+        self.assertEqual(saved.notification_status, "sent")
+        self.assertEqual(saved.notification_attempts, 2)
+        self.assertEqual(saved.notification_text, "")
+        self.assertEqual(len(paths), 2)
+        self.assert_no_exports()
+
+    async def test_file_is_removed_when_upload_is_cancelled(self):
+        task = await self.completed_task("长正文" * 1000)
+        paths = []
+
+        async def cancel_upload(_origin, chain):
+            paths.append(Path(chain.chain[0].file))
+            self.assertTrue(paths[0].exists())
+            raise asyncio.CancelledError
+
+        self.context.send_message.side_effect = cancel_upload
+        with self.assertRaises(asyncio.CancelledError):
+            await self.service._notify_task(task.task_id)
+        self.assertEqual(len(paths), 1)
+        self.assert_no_exports()
+
+    async def test_cleanup_failure_does_not_repeat_successful_delivery(self):
+        task = await self.completed_task("长正文" * 1000)
+        with patch.object(Path, "unlink", side_effect=PermissionError("file is busy")):
+            await self.service._notify_task(task.task_id)
+        self.assertEqual(self.context.send_message.await_count, 1)
+        saved = await self.archive.get_task(task.task_id)
+        self.assertEqual(saved.notification_status, "sent")
+
+    async def test_missing_platform_is_not_marked_as_sent(self):
+        task = await self.completed_task("short body")
+        self.context.send_message.return_value = False
+        await self.service._notify_task(task.task_id)
+        saved = await self.archive.get_task(task.task_id)
+        self.assertEqual(saved.notification_status, "failed")
+
+    async def test_ordinary_stats_does_not_send_long_result_file(self):
+        task = await self.completed_task("长正文" * 1000)
+        self.plugin._task_service = SimpleNamespace(
+            get_task=AsyncMock(return_value=SimpleNamespace(task=task, remote_error="")),
+            get_export_task=AsyncMock(),
+            capacity_status=AsyncMock(return_value=CapacityStatus(0, 1000)),
+            last_cleanup=AsyncMock(return_value=None),
+        )
+        event = FakeEvent(f"exa stats {task.task_id}")
+        event.send = AsyncMock()
+        command = self.module.ExaWebSearchPlugin.exa_admin_group.commands["stats"]
+        results = [item async for item in command(self.plugin, event, task.task_id)]
+        self.assertEqual(len(results), 1)
+        self.assertIn("仅显示前 1500", results[0].text)
+        event.send.assert_not_awaited()
+        self.context.send_message.assert_not_awaited()
+        self.plugin._task_service.get_export_task.assert_not_awaited()
+        self.assert_no_exports()
 
 
 class ExaRequestSafetyTests(unittest.IsolatedAsyncioTestCase):

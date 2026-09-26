@@ -1,7 +1,11 @@
+import asyncio
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from tools import exa_files
 from tools.exa_files import (
     AUTO_NOTIFICATION_TEXT_LIMIT,
     cleanup_exports,
@@ -92,6 +96,58 @@ class ExaFileRenderingTests(unittest.TestCase):
         summary = text.split("结果摘要：\n", 1)[1]
         self.assertTrue(summary.startswith("x" * 1500))
         self.assertIn("仅显示前 1500 / 1601 字符", summary)
+
+
+class ExaCompletionFileLifetimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_write_finishes_before_file_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            loop = asyncio.get_running_loop()
+            started = asyncio.Event()
+            release = threading.Event()
+            original = exa_files.write_completion_notification_markdown
+            task_id = "r-20260926-0001"
+
+            def delayed_write(*args):
+                loop.call_soon_threadsafe(started.set)
+                if not release.wait(timeout=5):
+                    raise RuntimeError("writer was not released")
+                return original(*args)
+
+            async def send():
+                async with exa_files.completion_notification_file(
+                    directory, task_id, "body"
+                ):
+                    self.fail("cancelled sender must not send")
+
+            with patch.object(
+                exa_files, "write_completion_notification_markdown", delayed_write
+            ):
+                sender = asyncio.create_task(send())
+                try:
+                    await asyncio.wait_for(started.wait(), timeout=3)
+                    sender.cancel()
+                finally:
+                    release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await sender
+            self.assertFalse((Path(directory) / "exports" / f"{task_id}.md").exists())
+
+    async def test_partial_file_is_removed_after_write_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path.write_text
+            task_id = "r-20260926-0002"
+
+            def fail_write(path, text, **kwargs):
+                original(path, text[:5], **kwargs)
+                raise OSError("disk is full")
+
+            with patch.object(Path, "write_text", fail_write):
+                with self.assertRaises(OSError):
+                    async with exa_files.completion_notification_file(
+                        directory, task_id, "body"
+                    ):
+                        self.fail("partially written file must not be sent")
+            self.assertFalse((Path(directory) / "exports" / f"{task_id}.md").exists())
 
 
 if __name__ == "__main__":

@@ -67,6 +67,8 @@ class TaskRecord:
     notification_status: str = "disabled"
     notification_attempts: int = 0
     notification_error: str = ""
+    notification_text: str = ""
+    notification_text_offset: int = 0
 
     @property
     def is_active(self) -> bool:
@@ -130,6 +132,14 @@ class TaskRecord:
             ),
             notification_error=(
                 row["notification_error"] if "notification_error" in row.keys() else ""
+            ),
+            notification_text=(
+                row["notification_text"] if "notification_text" in row.keys() else ""
+            ),
+            notification_text_offset=(
+                row["notification_text_offset"]
+                if "notification_text_offset" in row.keys()
+                else 0
             ),
         )
 
@@ -319,6 +329,22 @@ class TaskArchive:
         async with self._lock:
             return await asyncio.to_thread(self._claim_notification_sync, task_id)
 
+    async def begin_notification_text(self, task_id: str, text: str) -> TaskRecord:
+        if not text:
+            raise ValueError("通知正文不能为空。")
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._begin_notification_text_sync, task_id, text
+            )
+
+    async def advance_notification_text(self, task_id: str, offset: int) -> None:
+        if offset < 0:
+            raise ValueError("通知发送进度不能为负数。")
+        async with self._lock:
+            await asyncio.to_thread(
+                self._advance_notification_text_sync, task_id, offset
+            )
+
     async def finish_notification(
         self, task_id: str, *, error: str = "", retry: bool = False
     ) -> None:
@@ -393,7 +419,9 @@ class TaskArchive:
                     notification_message_id TEXT NOT NULL DEFAULT '',
                     notification_status TEXT NOT NULL DEFAULT 'disabled',
                     notification_attempts INTEGER NOT NULL DEFAULT 0,
-                    notification_error TEXT NOT NULL DEFAULT ''
+                    notification_error TEXT NOT NULL DEFAULT '',
+                    notification_text TEXT NOT NULL DEFAULT '',
+                    notification_text_offset INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -409,6 +437,8 @@ class TaskArchive:
                 "notification_status": "TEXT NOT NULL DEFAULT 'disabled'",
                 "notification_attempts": "INTEGER NOT NULL DEFAULT 0",
                 "notification_error": "TEXT NOT NULL DEFAULT ''",
+                "notification_text": "TEXT NOT NULL DEFAULT ''",
+                "notification_text_offset": "INTEGER NOT NULL DEFAULT 0",
             }
             for name, definition in notification_columns.items():
                 if name not in columns:
@@ -436,7 +466,7 @@ class TaskArchive:
                 "CREATE INDEX IF NOT EXISTS "
                 "idx_tasks_notification ON tasks(notification_status)"
             )
-            connection.execute("PRAGMA user_version=3")
+            connection.execute("PRAGMA user_version=4")
 
     def _reserve_task_sync(
         self,
@@ -667,6 +697,36 @@ class TaskArchive:
                 connection.execute("ROLLBACK")
                 raise
         return TaskRecord.from_row(row) if row is not None else None
+
+    def _begin_notification_text_sync(self, task_id: str, text: str) -> TaskRecord:
+        with closing(self._connect()) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE tasks SET notification_text =
+                    CASE WHEN notification_text = '' THEN ? ELSE notification_text END
+                WHERE task_id = ? AND notification_status = 'sending'
+                """,
+                (text, task_id),
+            )
+            if not cursor.rowcount:
+                raise TaskArchiveError("通知未处于发送状态，无法保存分段正文。")
+            row = connection.execute(
+                "SELECT * FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return TaskRecord.from_row(row)
+
+    def _advance_notification_text_sync(self, task_id: str, offset: int) -> None:
+        with closing(self._connect()) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE tasks SET notification_text_offset = ?
+                WHERE task_id = ? AND notification_status = 'sending'
+                    AND notification_text != '' AND notification_text_offset <= ?
+                """,
+                (offset, task_id, offset),
+            )
+            if not cursor.rowcount:
+                raise TaskArchiveError("通知发送进度已失效，停止继续投递。")
 
     def _finish_notification_sync(self, task_id: str, error: str, retry: bool) -> None:
         if not error:
