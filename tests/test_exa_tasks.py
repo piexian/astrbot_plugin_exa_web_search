@@ -210,7 +210,8 @@ class ExaTaskArchiveTests(unittest.IsolatedAsyncioTestCase):
         after = await self.archive.preview_cleanup()
 
         self.assertEqual(
-            after.estimated_bytes - before.estimated_bytes, len(snapshot.encode("utf-8"))
+            after.estimated_bytes - before.estimated_bytes,
+            len(snapshot.encode("utf-8")),
         )
         await self.archive.finish_notification(task.task_id, error="failed")
         failed = await self.archive.get_task(task.task_id)
