@@ -159,6 +159,7 @@ class AgentTaskService:
         self,
         query: str,
         *,
+        owner_plugin_id: str = "",
         notification_session: str = "",
         notification_scene: str = "",
         notification_message_id: str = "",
@@ -176,6 +177,7 @@ class AgentTaskService:
             key_slot,
             self.max_concurrency,
             key_fingerprint=key_fingerprint(api_key),
+            owner_plugin_id=owner_plugin_id,
             notification_session=notification_session,
             notification_scene=notification_scene,
             notification_message_id=notification_message_id,
@@ -226,9 +228,31 @@ class AgentTaskService:
             tasks = await self.archive.search_tasks(term)
         return tasks
 
-    async def get_task(self, task_id: str) -> TaskStatsResult:
+    async def search_tasks_for_owner(
+        self,
+        owner_plugin_id: str,
+        term: str = "",
+        limit: int = 20,
+    ) -> list[TaskRecord]:
+        """SDK 归属查询：SQL 先按 owner 过滤再 LIMIT，不看到其他插件任务。"""
+        await self.ensure_capacity()
+        tasks = await self.archive.search_tasks(
+            term, limit, owner_plugin_id=owner_plugin_id
+        )
+        capacity = await self.ensure_capacity()
+        if capacity.percent >= 100:
+            tasks = await self.archive.search_tasks(
+                term, limit, owner_plugin_id=owner_plugin_id
+            )
+        return tasks
+
+    async def get_task(self, task_id: str, *, exact: bool = False) -> TaskStatsResult:
         await self.archive.capacity_status()
-        task = await self.archive.resolve_task(task_id)
+        task = await (
+            self.archive.get_task(task_id)
+            if exact
+            else self.archive.resolve_task(task_id)
+        )
         remote_error = ""
         if task.is_active:
             try:
@@ -240,8 +264,12 @@ class AgentTaskService:
         await self.ensure_capacity()
         return TaskStatsResult(task, remote_error)
 
-    async def cancel_task(self, task_id: str) -> TaskRecord:
-        task = await self.archive.resolve_task(task_id)
+    async def cancel_task(self, task_id: str, *, exact: bool = False) -> TaskRecord:
+        task = await (
+            self.archive.get_task(task_id)
+            if exact
+            else self.archive.resolve_task(task_id)
+        )
         if not task.is_active:
             return task
         if not task.run_id:

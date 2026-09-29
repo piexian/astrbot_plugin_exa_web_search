@@ -54,6 +54,7 @@ from .tools.exa_tasks import (
     TaskArchiveError,
     TaskRecord,
 )
+from .tools.public_api import ExaPublicService
 
 PLUGIN_NAME = "astrbot_plugin_exa_web_search"
 
@@ -249,6 +250,7 @@ class ExaWebSearchPlugin(Star):
         )
 
         self._task_service: AgentTaskService | None = None
+        self._public_service = ExaPublicService(self)
         self._clean_outcomes: dict[str, str] = {}
         # 注册 LLM 函数工具
         from .tools.exa_tools import (
@@ -427,15 +429,29 @@ class ExaWebSearchPlugin(Star):
                 logger.info(f"[{PLUGIN_NAME}] Agent 任务归档已启用: {data_dir}")
             except Exception as exc:
                 logger.error(f"[{PLUGIN_NAME}] Agent 任务归档初始化失败: {exc}")
+        self._public_service.mark_initialized()
+
+    def get_service(self, api_version: int = 1) -> ExaPublicService:
+        """获取公开服务（SDK v1）；调用前通过 get_status()/wait_ready() 确认可用状态。"""
+        return self._public_service.for_api_version(api_version)
 
     async def terminate(self):
-        """插件销毁：关闭 HTTP 会话。"""
-        if self._task_service:
-            await self._task_service.shutdown()
-            self._task_service = None
-        if self._session and not self._session.closed:
-            await self._session.close()
-            self._session = None
+        """插件销毁：先拒绝新的 SDK 请求，再关闭任务服务与 HTTP 会话。"""
+        try:
+            await self._public_service.close()
+        finally:
+            try:
+                if self._task_service:
+                    try:
+                        await self._task_service.shutdown()
+                    finally:
+                        self._task_service = None
+            finally:
+                if self._session and not self._session.closed:
+                    try:
+                        await self._session.close()
+                    finally:
+                        self._session = None
 
     def _get_session(self) -> aiohttp.ClientSession:
         """获取或创建 aiohttp 会话。"""

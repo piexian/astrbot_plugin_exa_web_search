@@ -11,6 +11,7 @@
 - **指令 + LLM Tool** — 既可 `/exa` 手动搜索，也可由 AI 自动调用
 - **自定义 Base URL** — 支持代理地址
 - **Agent 异步研究** — 管理员可创建、查询、恢复和归档 Exa Agent 任务
+- **插件间调用（SDK v1）** — 向其他插件公开搜索、抓取与 Agent 任务门面
 
 ## 安装
 
@@ -84,7 +85,26 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 - **`web_fetch_exa`** — 提取网页完整内容
   - `exa-search` 默认返回 Highlights；`web_fetch_exa` 支持 `max_age_hours` 控制内容新鲜度，`exa-search` 支持 `user_location`。
 
-例如，当你对 AI 说"帮我搜一下最近的 AI 新闻"时，模型会自动调用 `exa-search` 并整理结果回复你。
+例如，当你对 AI 说“帮我搜一下最近的 AI 新闻”时，模型会自动调用 `exa-search` 并整理结果回复你。
+
+## 插件间调用（SDK v1）
+
+其他插件可通过 AstrBot 原生注册表获取本插件的公开服务门面，与指令和 LLM Tool 共用同一套配置、Key 轮询与额度：
+
+```python
+meta = context.get_registered_star("astrbot_plugin_exa_web_search")
+service = None
+if meta is not None and meta.activated and meta.star_cls is not None:
+    getter = getattr(meta.star_cls, "get_service", None)
+    if callable(getter):
+        service = getter(api_version=1)
+if service is not None and service.get_status()["ready"]:
+    results = await service.search("AstrBot 插件开发", num_results=5)
+```
+
+除搜索/抓取/代码上下文外，其他插件还可以用 `plugin_id` 归属创建、查询、列出和取消 Exa Agent 研究任务（`agent_create` / `agent_get` / `agent_list` / `agent_cancel`），默认不发通知；指令任务归指令管理，SDK 只能访问自己归属的任务。
+
+完整的发现、状态、能力、归属、通知、旧库兼容与错误语义见 [docs/plugin-api.md](docs/plugin-api.md)。
 
 ## 搜索类型说明
 
@@ -122,7 +142,8 @@ EXA50BUILDCLUB
 ```
 astrbot_plugin_exa_web_search/
 ├── .github/workflows/ci.yml   # CI：单元测试 + ruff lint/format + 语法检查 + 元数据校验
-├── tests/                     # 搜索、内容和代码上下文单元测试
+├── tests/                     # 搜索、内容、代码上下文与 SDK v1 契约测试
+├── docs/plugin-api.md          # 插件间调用（SDK v1）接入说明
 ├── skills/                     # LLM 搜索技能指引（自动加载）
 │   ├── company-research/SKILL.md       # 企业调研
 │   ├── lead-generation/SKILL.md        # 线索生成
@@ -140,10 +161,11 @@ astrbot_plugin_exa_web_search/
 │   ├── exa_files.py             # 归档 Markdown 与容量展示
 │   ├── exa_search.py           # 搜索参数规范化与校验
 │   ├── exa_task_service.py     # Agent 生命周期与恢复
-│   ├── exa_tasks.py             # SQLite 任务归档
-│   └── exa_tools.py             # LLM Tool 定义
+│   ├── exa_tasks.py             # SQLite 任务归档（含 owner_plugin_id 归属）
+│   ├── exa_tools.py             # LLM Tool 定义
+│   └── public_api.py            # SDK v1 公开门面
 ├── _conf_schema.json           # AstrBot 控制台配置 UI 定义
-├── main.py                     # 插件核心逻辑 (指令注册和初始化)
+├── main.py                     # 插件核心逻辑 (指令注册、初始化和 get_service)
 ├── metadata.yaml               # 插件元信息
 ├── README.md                   # 说明文档
 └── LICENSE                     # AGPL-3.0 许可证

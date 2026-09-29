@@ -61,6 +61,7 @@ class TaskRecord:
     request_id: str = ""
     cost: dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    owner_plugin_id: str = ""
     notification_session: str = ""
     notification_scene: str = ""
     notification_message_id: str = ""
@@ -107,6 +108,9 @@ class TaskRecord:
             request_id=row["request_id"] or "",
             cost=_load_object(row["cost_json"], {}),
             error=row["error"] or "",
+            owner_plugin_id=(
+                row["owner_plugin_id"] if "owner_plugin_id" in row.keys() else ""
+            ),
             notification_session=(
                 row["notification_session"]
                 if "notification_session" in row.keys()
@@ -251,6 +255,7 @@ class TaskArchive:
         max_concurrency: int,
         *,
         key_fingerprint: str = "",
+        owner_plugin_id: str = "",
         notification_session: str = "",
         notification_scene: str = "",
         notification_message_id: str = "",
@@ -268,6 +273,7 @@ class TaskArchive:
                 int(key_slot),
                 int(max_concurrency),
                 str(key_fingerprint),
+                str(owner_plugin_id).strip(),
                 str(notification_session).strip(),
                 str(notification_scene).strip(),
                 str(notification_message_id).strip(),
@@ -313,9 +319,18 @@ class TaskArchive:
         async with self._lock:
             return await asyncio.to_thread(self._resolve_task_sync, task_id)
 
-    async def search_tasks(self, term: str = "", limit: int = 20) -> list[TaskRecord]:
+    async def search_tasks(
+        self,
+        term: str = "",
+        limit: int = 20,
+        *,
+        owner_plugin_id: str | None = None,
+    ) -> list[TaskRecord]:
+        """按关键词查询；owner_plugin_id 非 None 时先按归属过滤再 LIMIT。"""
         async with self._lock:
-            return await asyncio.to_thread(self._search_tasks_sync, term, limit)
+            return await asyncio.to_thread(
+                self._search_tasks_sync, term, limit, owner_plugin_id
+            )
 
     async def list_active_tasks(self) -> list[TaskRecord]:
         async with self._lock:
@@ -414,6 +429,7 @@ class TaskArchive:
                     request_id TEXT NOT NULL DEFAULT '',
                     cost_json TEXT NOT NULL DEFAULT '{}',
                     error TEXT NOT NULL DEFAULT '',
+                    owner_plugin_id TEXT NOT NULL DEFAULT '',
                     notification_session TEXT NOT NULL DEFAULT '',
                     notification_scene TEXT NOT NULL DEFAULT '',
                     notification_message_id TEXT NOT NULL DEFAULT '',
@@ -429,6 +445,10 @@ class TaskArchive:
             if "key_fingerprint" not in columns:
                 connection.execute(
                     "ALTER TABLE tasks ADD COLUMN key_fingerprint TEXT NOT NULL DEFAULT ''"
+                )
+            if "owner_plugin_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE tasks ADD COLUMN owner_plugin_id TEXT NOT NULL DEFAULT ''"
                 )
             notification_columns = {
                 "notification_session": "TEXT NOT NULL DEFAULT ''",
@@ -474,6 +494,7 @@ class TaskArchive:
         key_slot: int,
         max_concurrency: int,
         key_fingerprint: str,
+        owner_plugin_id: str,
         notification_session: str,
         notification_scene: str,
         notification_message_id: str,
@@ -509,13 +530,14 @@ class TaskArchive:
                 connection.execute(
                     """
                     INSERT INTO tasks (
-                        task_id, run_id, key_slot, key_fingerprint, status, query,
+                        task_id, run_id, key_slot, key_fingerprint, owner_plugin_id,
+                        status, query,
                         created_at, updated_at, completed_at,
                         result_json, sources_json, request_id, cost_json, error,
                         notification_session, notification_scene, notification_message_id,
                         notification_status, notification_attempts, notification_error
                     ) VALUES (
-                        ?, NULL, ?, ?, 'queued', ?, ?, ?, NULL, '{}', '[]', '', '{}',
+                        ?, NULL, ?, ?, ?, 'queued', ?, ?, ?, NULL, '{}', '[]', '', '{}',
                         '', ?, ?, ?,
                         CASE WHEN ? = '' THEN 'disabled' ELSE 'pending' END, 0, ''
                     )
@@ -524,6 +546,7 @@ class TaskArchive:
                         task_id,
                         key_slot,
                         key_fingerprint,
+                        owner_plugin_id,
                         query,
                         timestamp,
                         timestamp,
@@ -746,52 +769,48 @@ class TaskArchive:
                 (status, error, status, status, task_id),
             )
 
-    def _search_tasks_sync(self, term: str, limit: int) -> list[TaskRecord]:
+    def _search_tasks_sync(
+        self,
+        term: str,
+        limit: int,
+        owner_plugin_id: str | None = None,
+    ) -> list[TaskRecord]:
         text = str(term or "").strip()
         limit = max(1, min(int(limit), 1000))
-        with closing(self._connect()) as connection:
-            if not text:
-                cursor = connection.execute(
-                    "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (limit,)
-                )
-            elif _TASK_PREFIX_RE.match(text):
-                cursor = connection.execute(
-                    """
-                    SELECT * FROM tasks WHERE task_id LIKE ? ESCAPE '\\'
-                    ORDER BY created_at DESC LIMIT ?
-                    """,
-                    (f"{_escape_like(text)}%", limit),
-                )
-            elif _DATE_RE.match(text) or _COMPACT_DATE_RE.match(text):
-                date_text = (
-                    f"{text[:4]}-{text[4:6]}-{text[6:8]}"
-                    if _COMPACT_DATE_RE.match(text)
-                    else text
-                )
-                cursor = connection.execute(
-                    """
-                    SELECT * FROM tasks WHERE created_at LIKE ? ESCAPE '\\'
-                    ORDER BY created_at DESC LIMIT ?
-                    """,
-                    (f"{_escape_like(date_text)}%", limit),
-                )
-            elif text.lower() in TASK_STATUSES:
-                cursor = connection.execute(
-                    """
-                    SELECT * FROM tasks WHERE status = ?
-                    ORDER BY created_at DESC LIMIT ?
-                    """,
-                    (text.lower(), limit),
-                )
-            else:
-                cursor = connection.execute(
-                    """
-                    SELECT * FROM tasks WHERE query LIKE ? ESCAPE '\\'
-                    ORDER BY created_at DESC LIMIT ?
-                    """,
-                    (f"%{_escape_like(text)}%", limit),
-                )
-            return [TaskRecord.from_row(row) for row in cursor.fetchall()]
+        owner_filter = "owner_plugin_id = ?" if owner_plugin_id is not None else ""
+        owner_params: tuple[Any, ...] = (
+            () if owner_plugin_id is None else (owner_plugin_id,)
+        )
+
+        def fetch(where: str, params: tuple[Any, ...]) -> list[TaskRecord]:
+            clauses = [part for part in (where, owner_filter) if part]
+            sql = "SELECT * FROM tasks"
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += " ORDER BY created_at DESC LIMIT ?"
+            with closing(self._connect()) as connection:
+                rows = connection.execute(
+                    sql,  # noqa: S608
+                    (*params, *owner_params, limit),
+                ).fetchall()
+            return [TaskRecord.from_row(row) for row in rows]
+
+        if not text:
+            return fetch("", ())
+        if _TASK_PREFIX_RE.match(text):
+            return fetch("task_id LIKE ? ESCAPE '\\'", (f"{_escape_like(text)}%",))
+        if _DATE_RE.match(text) or _COMPACT_DATE_RE.match(text):
+            date_text = (
+                f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+                if _COMPACT_DATE_RE.match(text)
+                else text
+            )
+            return fetch(
+                "created_at LIKE ? ESCAPE '\\'", (f"{_escape_like(date_text)}%",)
+            )
+        if text.lower() in TASK_STATUSES:
+            return fetch("status = ?", (text.lower(),))
+        return fetch("query LIKE ? ESCAPE '\\'", (f"%{_escape_like(text)}%",))
 
     def _reclaim_sync(self, connection: sqlite3.Connection) -> None:
         for _ in range(2):
