@@ -5,8 +5,21 @@ from typing import Any
 from astrbot.api import FunctionTool
 from astrbot.api.event import AstrMessageEvent
 
+from .exa_agent import AGENT_EFFORTS
 from .exa_context import format_context_result
 from .exa_search import SEARCH_CATEGORIES, SEARCH_TYPES, normalize_search_type
+
+
+def build_search_tool_payload(data: dict) -> dict:
+    """Assemble the LLM tool JSON from a search response."""
+    payload: dict = {"results": data.get("results", [])}
+    notices = data.get("notices")
+    if isinstance(notices, list) and notices:
+        payload["notices"] = notices
+    output = data.get("output")
+    if isinstance(output, dict) and output:
+        payload["output"] = output
+    return payload
 
 
 @dataclass
@@ -69,6 +82,28 @@ class ExaSearchTool(FunctionTool):
                     "type": "string",
                     "description": "Optional. End date filter in ISO 8601 format.",
                 },
+                "objective": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Goal for this search turn: which documents "
+                        "should rank first, which to exclude, what facts to pull."
+                    ),
+                },
+                "system_prompt": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Extra instructions guiding source "
+                        "preferences or output behavior."
+                    ),
+                },
+                "output_schema": {
+                    "type": "object",
+                    "description": (
+                        'Optional. JSON Schema with root type "text" or '
+                        '"object"; the response then includes synthesized '
+                        "output."
+                    ),
+                },
             },
             "required": ["query"],
         }
@@ -86,10 +121,14 @@ class ExaSearchTool(FunctionTool):
         exclude_domains: str = "",
         start_published_date: str = "",
         end_published_date: str = "",
+        objective: str = "",
+        system_prompt: str = "",
+        output_schema: object = None,
     ) -> str:
         from ..main import (
             PLUGIN_NAME,
             ExaAPIError,
+            _derive_user_identifier,
             _normalize_count,
         )
 
@@ -106,9 +145,13 @@ class ExaSearchTool(FunctionTool):
         if not search_type:
             search_type = plugin.config.get("default_search_type", "auto")
 
+        user_identifier = ""
+        if plugin.config.get("send_user_identifier", False):
+            user_identifier = _derive_user_identifier(event)
+
         try:
             num = _normalize_count(max_results, default=10, minimum=1, maximum=100)
-            results = await plugin._exa_search(
+            data = await plugin._exa_search_response(
                 query,
                 num_results=num,
                 search_type=normalize_search_type(search_type),
@@ -118,9 +161,12 @@ class ExaSearchTool(FunctionTool):
                 exclude_domains=exclude_domains,
                 start_published_date=str(start_published_date).strip(),
                 end_published_date=str(end_published_date).strip(),
+                objective=str(objective or "").strip(),
+                system_prompt=str(system_prompt or "").strip(),
+                output_schema=output_schema,
+                user_identifier=user_identifier,
             )
-            return json.dumps(results, ensure_ascii=False)
-
+            return json.dumps(build_search_tool_payload(data), ensure_ascii=False)
         except ExaAPIError as e:
             return f"Error: Exa search failed: {e}"
         except ValueError as e:
@@ -264,3 +310,107 @@ class ExaWebFetchTool(FunctionTool):
 
             logger.error(f"[{PLUGIN_NAME}] web_fetch_exa exception: {e}")
             return f"Error: Exa content extraction exception: {e}"
+
+
+@dataclass
+class ExaAgentSearchTool(FunctionTool):
+    plugin: Any = None
+    name: str = "exa-agent-search"
+    description: str = (
+        "Launch a background Exa Agent deep-research task. Returns the task id "
+        "immediately; the final report is delivered to the session later. "
+        "Use for multi-step research, list building, or enrichment."
+    )
+    parameters: dict = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Required. Natural-language research question or instructions."
+                    ),
+                },
+                "effort": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Research effort. Default follows plugin config."
+                    ),
+                    "enum": sorted(AGENT_EFFORTS),
+                },
+                "output_schema": {
+                    "type": "object",
+                    "description": (
+                        "Optional. JSON Schema object for structured output."
+                    ),
+                },
+                "continue_from": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Task id (r-...) of a completed task to "
+                        "continue from."
+                    ),
+                },
+            },
+            "required": ["query"],
+        }
+    )
+
+    async def run(
+        self,
+        event: AstrMessageEvent,
+        query: str,
+        effort: str = "",
+        output_schema: object = None,
+        continue_from: str = "",
+    ) -> str:
+        from ..main import (
+            PLUGIN_NAME,
+            _notification_message_id,
+            _notification_scene,
+        )
+        from .exa_tasks import ConcurrencyLimitError, TaskArchiveError
+
+        plugin = self.plugin
+        if plugin is None:
+            return "Error: plugin_unavailable: plugin instance not initialized"
+        service = plugin._task_service
+        if service is None:
+            return (
+                "Error: agent_unavailable: Agent service not initialized "
+                "(check Exa API keys)"
+            )
+        text = str(query or "").strip()
+        if not text:
+            return "Error: invalid_request: query must be a non-empty string"
+        try:
+            outcome = await service.create_task(
+                text,
+                notification_session=event.unified_msg_origin,
+                notification_scene=_notification_scene(event),
+                notification_message_id=_notification_message_id(event),
+                effort=str(effort or "").strip(),
+                output_schema=output_schema,
+                previous_task_id=str(continue_from or "").strip(),
+            )
+        except ConcurrencyLimitError as exc:
+            return f"Error: concurrency_limit: {exc}"
+        except TaskArchiveError as exc:
+            return f"Error: task_not_found: {exc}"
+        except ValueError as exc:
+            return f"Error: invalid_request: {exc}"
+        except RuntimeError as exc:
+            return f"Error: agent_error: {exc}"
+        except Exception as exc:
+            from astrbot.api import logger
+
+            logger.error(f"[{PLUGIN_NAME}] exa-agent-search exception: {exc}")
+            return f"Error: internal: {exc}"
+        payload = {
+            "task_id": outcome.task.task_id,
+            "status": outcome.task.status,
+            "query": outcome.task.query,
+        }
+        if outcome.warning:
+            payload["warning"] = outcome.warning
+        return json.dumps(payload, ensure_ascii=False)

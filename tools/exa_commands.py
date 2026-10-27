@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-ADMIN_ROUTE_PREFIXES = frozenset({"-r", "-s", "stats", "clean", "cancel"})
+import re
+
+ADMIN_ROUTE_PREFIXES = frozenset({"-r", "-s", "stats", "clean", "cancel", "stop"})
 
 
 def _single_token(value: str, message: str) -> str:
@@ -48,6 +50,26 @@ def parse_research_query(value: str) -> str:
     if not text:
         raise ValueError("研究问题不能为空。")
     return text
+
+
+_CONTINUE_RE = re.compile(r"\s+--continue[=\s]\s*(\S+)\s*$", re.IGNORECASE)
+
+
+def parse_research_request(value: str) -> tuple[str, str]:
+    """Parse an optional -r prefix and a trailing --continue <task_id> flag."""
+    text = str(value or "").strip()
+    if text == "-r" or text.startswith("-r "):
+        text = text[2:].strip()
+    continue_task_id = ""
+    match = _CONTINUE_RE.search(text)
+    if match:
+        continue_task_id = match.group(1)
+        text = text[: match.start()].rstrip()
+    if not text or text.lower().startswith("--continue"):
+        raise ValueError("研究问题不能为空。")
+    if not continue_task_id and text.lower().endswith("--continue"):
+        raise ValueError("--continue 后必须提供任务号。")
+    return text, continue_task_id
 
 
 def parse_stats_query(value: str) -> tuple[bool, str]:

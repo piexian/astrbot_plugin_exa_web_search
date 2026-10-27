@@ -64,5 +64,37 @@ class ExaCommandParsingTests(unittest.TestCase):
                 self.assertFalse(is_reserved_exa_query(query))
 
 
+class ParseResearchRequestTests(unittest.TestCase):
+    def test_extracts_trailing_continue_task_id(self):
+        from tools.exa_commands import parse_research_request
+
+        self.assertEqual(
+            parse_research_request("-r 找AI公司 --continue r-20260924-0001"),
+            ("找AI公司", "r-20260924-0001"),
+        )
+        self.assertEqual(
+            parse_research_request("找AI公司 --continue=r-1"), ("找AI公司", "r-1")
+        )
+        self.assertEqual(
+            parse_research_request("找AI公司 --CONTINUE r-1 "), ("找AI公司", "r-1")
+        )
+
+    def test_plain_query_has_no_continue_target(self):
+        from tools.exa_commands import parse_research_request
+
+        self.assertEqual(parse_research_request("找AI公司"), ("找AI公司", ""))
+        self.assertEqual(
+            parse_research_request("normal --continueous text"),
+            ("normal --continueous text", ""),
+        )
+
+    def test_malformed_continue_flags_are_rejected(self):
+        from tools.exa_commands import parse_research_request
+
+        for bad in ("找AI公司 --continue", "--continue r-1", "-r --continue r-1", ""):
+            with self.subTest(bad=bad):
+                self.assertRaises(ValueError, parse_research_request, bad)
+
+
 if __name__ == "__main__":
     unittest.main()

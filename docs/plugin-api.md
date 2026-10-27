@@ -42,7 +42,8 @@ context_data = await service.code_context("how to parse yaml", tokens_num="dynam
 
 | 方法 | 可选参数 | 返回 |
 |---|---|---|
-| `search(query, ...)` | `num_results/search_type/category/include_domains/exclude_domains/start_published_date/end_published_date/user_location/moderation/timeout` | 结果列表 |
+| `search(query, ...)` | `num_results/search_type/category/include_domains/exclude_domains/start_published_date/end_published_date/user_location/moderation/objective/system_prompt/output_schema/user_identifier/timeout` | 结果列表 |
+| `search_response(query, ...)` | 同 `search` | 完整响应字典（results/notices/output；`output_schema` 合成输出从这里取） |
 | `fetch(url, ...)` | `max_characters/max_age_hours/timeout` | 内容列表 |
 | `code_context(query, ...)` | `tokens_num/timeout` | 业务字典 |
 
@@ -60,7 +61,7 @@ tasks = await service.agent_list("my_plugin", limit=20)
 
 | 方法 | 返回 |
 |---|---|
-| `agent_create(plugin_id, query, *, event=None, notify=False)` | `{"task": snapshot, "warning": str}` |
+| `agent_create(plugin_id, query, *, event=None, notify=False, effort="", output_schema=None, previous_task_id="")` | `{"task": snapshot, "warning": str}` |
 | `agent_get(plugin_id, task_id)` | `{"task": snapshot, "remote_error": str}` |
 | `agent_list(plugin_id, term="", *, limit=20)` | 快照列表，limit 为 1–100 的整数 |
 | `agent_cancel(plugin_id, task_id)` | 取消后的任务快照 |

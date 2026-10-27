@@ -61,6 +61,8 @@ class FakeAgentClient:
         self.list_calls = []
         self.last_task_id = ""
         self.cancel_calls = []
+        self.stop_response = None
+        self.stop_calls = []
 
     async def create_run(self, query, api_key, **_kwargs):
         self.create_calls.append((query, api_key, _kwargs))
@@ -106,6 +108,12 @@ class FakeAgentClient:
         if isinstance(self.cancel_response, Exception):
             raise self.cancel_response
         return self.cancel_response
+
+    async def stop_run(self, run_id, api_key):
+        self.stop_calls.append((run_id, api_key))
+        if isinstance(self.stop_response, Exception):
+            raise self.stop_response
+        return self.stop_response
 
 
 class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -557,6 +565,107 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         restored = await self.archive.get_task(task.task_id)
         self.assertEqual(restored.status, "interrupted")
         self.assertEqual(self.client.create_calls, [])
+
+    async def test_stop_task_uses_bound_key_and_applies_remote_state(self):
+        task = await self.archive.reserve_task("stop me", 0, 2)
+        await self.archive.update_task(
+            task.task_id, run_id="agent_run_9", status="running"
+        )
+        self.client.stop_response = remote(
+            "completed", run_id="agent_run_9", text="partial"
+        )
+
+        stopped = await self.service.stop_task(task.task_id)
+
+        self.assertEqual(self.client.stop_calls, [("agent_run_9", "key-zero")])
+        self.assertEqual(stopped.status, "completed")
+
+    async def test_stop_before_run_visible_keeps_task_active(self):
+        task = await self.archive.reserve_task("queued stop", 0, 2)
+        self.client.list_responses.append({"data": [], "hasMore": False})
+
+        stopped = await self.service.stop_task(task.task_id)
+
+        self.assertEqual(self.client.stop_calls, [])
+        self.assertEqual(stopped.status, "queued")
+        self.assertIn("未执行停止", stopped.error)
+
+    async def test_continue_from_completed_task_passes_previous_run(self):
+        self.client.create_responses.append(remote("running"))
+        first = await self.service.create_task("first question")
+        await self.wait_for_status(first.task.task_id, "completed")
+        self.client.create_responses.append(remote("running"))
+
+        second = await self.service.create_task(
+            "narrow it down",
+            previous_task_id=first.task.task_id,
+            effort="high",
+            output_schema={"type": "object"},
+        )
+
+        kwargs = self.client.create_calls[-1][2]
+        self.assertEqual(kwargs["previous_run_id"], first.task.run_id)
+        self.assertEqual(kwargs["effort"], "high")
+        self.assertEqual(kwargs["output_schema"], {"type": "object"})
+        self.assertNotEqual(second.task.task_id, first.task.task_id)
+        await self.wait_for_status(second.task.task_id, "completed")
+
+    async def test_continue_rejects_non_completed_target(self):
+        self.client.create_responses.append(remote("running"))
+        self.client.get_responses.append(remote("running"))
+        first = await self.service.create_task("still running")
+
+        with self.assertRaises(ValueError):
+            await self.service.create_task("again", previous_task_id=first.task.task_id)
+
+    async def test_continue_rejects_foreign_owner_via_sdk(self):
+        self.client.create_responses.append(remote("running"))
+        self.client.get_responses.append(remote("running"))
+        first = await self.service.create_task("owned", owner_plugin_id="other_plugin")
+
+        with self.assertRaises(ValueError):
+            await self.service.create_task(
+                "again",
+                owner_plugin_id="my_plugin",
+                previous_task_id=first.task.task_id,
+            )
+
+    async def test_command_path_may_continue_any_completed_task(self):
+        task = await self.archive.reserve_task(
+            "owned", 0, 2, owner_plugin_id="other_plugin"
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", run_id="agent_run_c"
+        )
+        self.client.create_responses.append(remote("running"))
+
+        outcome = await self.service.create_task(
+            "follow up", previous_task_id=task.task_id
+        )
+
+        self.assertEqual(
+            self.client.create_calls[-1][2]["previous_run_id"], "agent_run_c"
+        )
+        self.assertEqual(outcome.task.owner_plugin_id, "")
+
+    async def test_stop_rejection_adds_ultra_guidance(self):
+        task = await self.archive.reserve_task("auto stop", 0, 2)
+        await self.archive.update_task(
+            task.task_id, run_id="agent_run_s", status="running"
+        )
+        self.client.stop_response = ExaAgentAPIError(
+            "Exa Agent API [POST /agent/runs/agent_run_s/stop] HTTP 400", status=400
+        )
+
+        with self.assertRaises(ExaAgentAPIError) as caught:
+            await self.service.stop_task(task.task_id)
+
+        self.assertIn("ultra", str(caught.exception))
+        self.assertIn("/exa cancel", str(caught.exception))
+
+    async def test_create_rejects_invalid_output_schema(self):
+        with self.assertRaises(ValueError):
+            await self.service.create_task("bad schema", output_schema=[])
 
 
 if __name__ == "__main__":

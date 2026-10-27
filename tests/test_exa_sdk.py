@@ -603,6 +603,25 @@ class SdkSearchBusinessTests(_SdkTestBase):
         self.assertTrue(payload["moderation"])
         self.assertEqual(call["headers"]["x-api-key"], "key-zero")
 
+    async def test_search_response_returns_full_envelope_with_output(self):
+        session = _SearchSession(
+            {
+                "results": [{"url": "https://a.example"}],
+                "notices": [{"code": "X"}],
+                "output": {"content": "answer"},
+            }
+        )
+        self._attach_session(session)
+
+        data = await self.facade.search_response(
+            "weather", output_schema={"type": "text"}
+        )
+
+        self.assertEqual(data["results"], [{"url": "https://a.example"}])
+        self.assertEqual(data["notices"], [{"code": "X"}])
+        self.assertEqual(data["output"], {"content": "answer"})
+        self.assertEqual(session.calls[0]["payload"]["outputSchema"], {"type": "text"})
+
     async def test_search_does_not_wrap_command_retry(self):
         session = _SearchSession(status=429)
         self._attach_session(session)

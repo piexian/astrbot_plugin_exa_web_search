@@ -36,15 +36,17 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 | Exa API Base URL | 自定义 API 地址（代理/中转站） | `https://api.exa.ai` |
 | 请求超时时间 | API 请求最大等待秒数 | `30` |
 | 搜索返回最大条数 | 搜索结果数量（1-100） | `10` |
-| 默认搜索类型 | instant/fast/auto/deep-lite/deep/deep-reasoning（推荐 auto） | `auto` |
+| 默认搜索类型 | lite/instant/fast/auto/deep-lite/deep/deep-reasoning（推荐 auto） | `auto` |
 | 启用内容审核 | 由 Exa 过滤不安全内容 | `false` |
 | 显示来源 URL | 指令结果中是否显示来源 | `true` |
 | 最大来源数量 | 显示的来源链接数量 | `5` |
 | 最大重试次数 | 指令调用时的重试次数 | `3` |
 | Agent 最大并发任务数 | 同时运行的 Agent 任务上限 | `2` |
 | Agent 状态轮询间隔 | 状态查询间隔（秒） | `5` |
-| Agent 研究强度 | minimal/low/medium/high/xhigh/auto/max | `auto` |
-| Agent 单任务预算 | 单个任务预算上限（美元） | `5` |
+| Agent 研究强度 | minimal/low/medium/high/xhigh/auto/ultra | `auto` |
+| Agent 单任务预算 | 单个任务预算上限（美元），仅 auto/ultra 生效（$1-$100） | `5` |
+| Agent ultra 时长预算 | ultra 档软性时长上限（300-10800 秒，0 不限制） | `0` |
+| 匿名用户标识 | 搜索请求附带按发送者派生的 userIdentifier 用于 Exa 归因 | `false` |
 | 任务归档容量上限 | SQLite 主库、WAL、SHM 总容量（MB） | `100` |
 | HTTP 代理 | 代理地址 | 空 |
 
@@ -62,12 +64,13 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 ### Agent 任务（管理员）
 
 ```
-/exa -r <研究问题>       # 创建异步研究任务
+/exa -r <研究问题> [--continue <任务号>]  # 创建研究任务，可续跑已完成任务
 /exa -s [筛选词]         # 按任务号、日期、状态或关键词查询
 /exa stats <任务号>      # 查看状态、结果、费用和容量
 /exa stats -q <任务号>   # 发送 Markdown 归档文件
 /exa clean <任务号|all>  # 清理终态任务（all 需确认）
 /exa cancel <任务号>     # 取消活动任务
+/exa stop <任务号>       # 优雅停止并保留已收集结果（仅 ultra 档，非 ultra 请用 cancel）
 ```
 
 任务结束后会自动返回一次“任务号 + 正文”；完整消息超过 1500 字符时改发以任务号命名、仅含任务号和正文的 Markdown 文件。普通 `stats` 不发送文件，只有显式使用 `stats -q` 才导出归档。
@@ -78,12 +81,13 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 
 ### LLM Tool 自动调用
 
-插件注册了 3 个 LLM Tool，大模型会在需要时自动调用：
+插件注册了 4 个 LLM Tool，大模型会在需要时自动调用：
 
 - **`exa-code-context`** — 获取代码示例和实现上下文
 - **`exa-search`** — 语义搜索（支持搜索类型和垂直分类）
 - **`web_fetch_exa`** — 提取网页完整内容
-  - `exa-search` 默认返回 Highlights；`web_fetch_exa` 支持 `max_age_hours` 控制内容新鲜度，`exa-search` 支持 `user_location`。
+  - `exa-search` 默认返回 Highlights，支持 `objective`（本轮检索目标）、`system_prompt`、`output_schema`（合成输出）；`web_fetch_exa` 支持 `max_age_hours` 控制内容新鲜度，`exa-search` 支持 `user_location`。
+- **`exa-agent-search`** — 后台深度研究任务：立即返回任务号，完成后自动通知会话；支持 `effort`、`output_schema`（结构化输出）、`continue_from`（续跑）
 
 例如，当你对 AI 说“帮我搜一下最近的 AI 新闻”时，模型会自动调用 `exa-search` 并整理结果回复你。
 
@@ -110,14 +114,15 @@ if service is not None and service.get_status()["ready"]:
 
 | 类型 | 说明 |
 |------|------|
-| `instant` | 最低延迟，适合实时场景 |
-| `fast` | 低延迟高质量搜索 |
+| `lite` | 低成本低延迟，仅使用缓存内容，适合实时交互 |
+| `instant` | 旧类型（官方建议改用 lite），最低延迟 |
+| `fast` | 旧类型（官方建议改用 lite），低延迟高质量 |
 | `auto` | 智能平衡速度和质量（默认，推荐） |
 | `deep-lite` | 轻量深度研究 |
 | `deep` | 多步研究和综合 |
-| `deep-reasoning` | 复杂推理任务 |
+| `deep-reasoning` | 旧类型（官方建议改用 deep 或 Agent 任务），复杂推理 |
 
-旧配置 `keyword`、`neural` 和旧分类 `research paper` 会分别按 `auto`、`publication` 处理。`deep` 和 `deep-reasoning` 的请求超时至少为 60 秒和 90 秒。
+旧配置 `keyword`、`neural` 和旧分类 `research paper` 会分别按 `auto`、`publication` 处理；Agent 强度旧值 `max` 按 `ultra` 处理。`deep` 和 `deep-reasoning` 的请求超时至少为 60 秒和 90 秒。`lite` 类型不支持 `objective` 之外的合成参数（`outputSchema`、`systemPrompt` 会被拒绝）。
 
 ## 垂直搜索分类
 

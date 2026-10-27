@@ -18,6 +18,7 @@ class ExaSearchContractTests(unittest.TestCase):
             SEARCH_TYPES,
             frozenset(
                 {
+                    "lite",
                     "instant",
                     "fast",
                     "auto",
@@ -121,6 +122,70 @@ class ExaSearchContractTests(unittest.TestCase):
         self.assertEqual(resolve_timeout_seconds(30, "deep"), 60)
         self.assertEqual(resolve_timeout_seconds(30, "deep-reasoning"), 90)
         self.assertEqual(resolve_timeout_seconds(120, "deep-reasoning"), 120)
+
+
+class ExaSearchNewParamTests(unittest.TestCase):
+    def test_lite_is_a_valid_type_with_parameter_whitelist(self):
+        from tools.exa_search import build_search_payload
+
+        payload = build_search_payload(
+            "q", search_type="lite", objective="goal", user_identifier="u_1"
+        )
+        self.assertEqual(payload["type"], "lite")
+        self.assertEqual(payload["objective"], "goal")
+        with self.assertRaises(ValueError):
+            build_search_payload("q", search_type="lite", system_prompt="sp")
+        with self.assertRaises(ValueError):
+            build_search_payload(
+                "q", search_type="lite", output_schema={"type": "text"}
+            )
+
+    def test_objective_is_capped_at_4096_chars(self):
+        from tools.exa_search import normalize_objective
+
+        self.assertEqual(normalize_objective(""), "")
+        self.assertEqual(normalize_objective(" goal "), "goal")
+        with self.assertRaises(ValueError):
+            normalize_objective("x" * 4097)
+
+    def test_user_identifier_pattern(self):
+        from tools.exa_search import normalize_user_identifier
+
+        self.assertEqual(normalize_user_identifier("abc_1-2"), "abc_1-2")
+        self.assertEqual(normalize_user_identifier(""), "")
+        for bad in ("a b", "a@b", "x" * 65):
+            with self.subTest(bad=bad):
+                self.assertRaises(ValueError, normalize_user_identifier, bad)
+
+    def test_output_schema_root_type_must_be_text_or_object(self):
+        from tools.exa_search import normalize_output_schema
+
+        self.assertEqual(normalize_output_schema({"type": "text"}), {"type": "text"})
+        self.assertEqual(
+            normalize_output_schema('{"type":"object"}'), {"type": "object"}
+        )
+        for bad in ({"type": "array"}, [], "not json", 5):
+            with self.subTest(bad=bad):
+                self.assertRaises(ValueError, normalize_output_schema, bad)
+
+    def test_payload_carries_new_params_when_set(self):
+        from tools.exa_search import build_search_payload
+
+        payload = build_search_payload(
+            "q",
+            objective="goal",
+            system_prompt="sp",
+            user_identifier="u1",
+            output_schema={"type": "text"},
+        )
+        self.assertEqual(payload["objective"], "goal")
+        self.assertEqual(payload["systemPrompt"], "sp")
+        self.assertEqual(payload["userIdentifier"], "u1")
+        self.assertEqual(payload["outputSchema"], {"type": "text"})
+
+        default = build_search_payload("q")
+        for key in ("objective", "systemPrompt", "userIdentifier", "outputSchema"):
+            self.assertNotIn(key, default)
 
 
 if __name__ == "__main__":

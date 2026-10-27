@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import time
 from datetime import datetime, timezone
@@ -18,12 +19,17 @@ from astrbot.core.utils.session_waiter import (
     session_waiter,
 )
 
-from .tools.exa_agent import ExaAgentClient
+from .tools.exa_agent import (
+    ExaAgentClient,
+    normalize_agent_effort,
+    normalize_budget_dollars,
+    normalize_budget_duration_seconds,
+)
 from .tools.exa_commands import (
     extract_exa_payload,
     is_reserved_exa_query,
     parse_clean_query,
-    parse_research_query,
+    parse_research_request,
     parse_search_term,
     parse_stats_query,
 )
@@ -211,6 +217,12 @@ def _admin_session_id(event: AstrMessageEvent) -> str:
     return f"{event.unified_msg_origin}\0{event.get_sender_id()}"
 
 
+def _derive_user_identifier(event: AstrMessageEvent) -> str:
+    """Derive a stable opaque identifier from the sender for Exa attribution."""
+    raw = f"{event.get_platform_name()}:{event.get_sender_id() or ''}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
 class _AdminGroupRouteFilter(filter.CustomFilter):
     def filter(self, event: AstrMessageEvent, _cfg) -> bool:
         return event.get_message_str().strip() != "exa"
@@ -254,6 +266,7 @@ class ExaWebSearchPlugin(Star):
         self._clean_outcomes: dict[str, str] = {}
         # 注册 LLM 函数工具
         from .tools.exa_tools import (
+            ExaAgentSearchTool,
             ExaCodeContextTool,
             ExaSearchTool,
             ExaWebFetchTool,
@@ -263,6 +276,7 @@ class ExaWebSearchPlugin(Star):
             ExaSearchTool(plugin=self),
             ExaCodeContextTool(plugin=self),
             ExaWebFetchTool(plugin=self),
+            ExaAgentSearchTool(plugin=self),
         )
 
     async def _send_agent_completion_notification(
@@ -361,25 +375,18 @@ class ExaWebSearchPlugin(Star):
                     minimum=0.001,
                     maximum=100000.0,
                 )
-                effort = str(self.config.get("agent_effort", "auto"))
-                if effort not in {
-                    "minimal",
-                    "low",
-                    "medium",
-                    "high",
-                    "xhigh",
-                    "auto",
-                    "max",
-                }:
-                    effort = "auto"
-                budget = _normalize_float(
-                    self.config.get("agent_budget_max_dollars", 5),
-                    default=5.0,
-                    minimum=0.0,
-                    maximum=1000.0,
+                effort = normalize_agent_effort(self.config.get("agent_effort", "auto"))
+                budget = normalize_budget_dollars(
+                    _normalize_float(
+                        self.config.get("agent_budget_max_dollars", 5),
+                        default=5.0,
+                        minimum=0.0,
+                        maximum=1000.0,
+                    )
                 )
-                if budget <= 0:
-                    budget = None
+                budget_duration = normalize_budget_duration_seconds(
+                    self.config.get("agent_budget_max_duration_seconds", 0)
+                )
                 client = ExaAgentClient(
                     self._get_session(),
                     self._base_url,
@@ -420,6 +427,7 @@ class ExaWebSearchPlugin(Star):
                     ),
                     effort=effort,
                     budget_max_dollars=budget,
+                    budget_max_duration_seconds=budget_duration,
                     notification_sender=partial(
                         self._send_agent_completion_notification, archive=archive
                     ),
@@ -518,6 +526,8 @@ class ExaWebSearchPlugin(Star):
                     cost = data.get("costDollars", {})
                     total = normalize_cost_total(cost)
                     logger.debug(f"[{PLUGIN_NAME}] {endpoint} 费用: ${total}")
+                    for warning in data.get("warnings") or []:
+                        logger.warning(f"[{PLUGIN_NAME}] {endpoint} warning: {warning}")
                     return data
 
                 # 错误处理
@@ -577,7 +587,7 @@ class ExaWebSearchPlugin(Star):
                 status=0,
             )
 
-    async def _exa_search(
+    async def _exa_search_response(
         self,
         query: str,
         *,
@@ -590,9 +600,13 @@ class ExaWebSearchPlugin(Star):
         end_published_date: str = "",
         user_location: str = "",
         moderation: bool | None = None,
+        objective: str = "",
+        system_prompt: str = "",
+        output_schema: object = None,
+        user_identifier: str = "",
         timeout: int | None = None,
-    ) -> list[dict]:
-        """调用 Exa search 端点。"""
+    ) -> dict:
+        """调用 Exa search 端点，返回完整响应（含 notices/output）。"""
         if moderation is None:
             moderation = bool(self.config.get("moderation", False))
         payload = build_search_payload(
@@ -606,11 +620,53 @@ class ExaWebSearchPlugin(Star):
             end_published_date=end_published_date,
             user_location=user_location,
             moderation=moderation,
+            objective=objective,
+            system_prompt=system_prompt,
+            output_schema=output_schema,
+            user_identifier=user_identifier,
         )
         if timeout is None:
             timeout = self.config.get("timeout_seconds", MIN_TIMEOUT_SECONDS)
         request_timeout = resolve_timeout_seconds(timeout, payload["type"])
-        data = await self._exa_request("/search", payload, timeout=request_timeout)
+        return await self._exa_request("/search", payload, timeout=request_timeout)
+
+    async def _exa_search(
+        self,
+        query: str,
+        *,
+        num_results: int = 10,
+        search_type: str = "auto",
+        category: str = "",
+        include_domains: str = "",
+        exclude_domains: str = "",
+        start_published_date: str = "",
+        end_published_date: str = "",
+        user_location: str = "",
+        moderation: bool | None = None,
+        objective: str = "",
+        system_prompt: str = "",
+        output_schema: object = None,
+        user_identifier: str = "",
+        timeout: int | None = None,
+    ) -> list[dict]:
+        """调用 Exa search 端点；返回结果列表，保持 SDK v1 兼容。"""
+        data = await self._exa_search_response(
+            query,
+            num_results=num_results,
+            search_type=search_type,
+            category=category,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+            start_published_date=start_published_date,
+            end_published_date=end_published_date,
+            user_location=user_location,
+            moderation=moderation,
+            objective=objective,
+            system_prompt=system_prompt,
+            output_schema=output_schema,
+            user_identifier=user_identifier,
+            timeout=timeout,
+        )
         return data.get("results", [])
 
     async def _exa_code_context(
@@ -620,7 +676,11 @@ class ExaWebSearchPlugin(Star):
         tokens_num: str | int = "dynamic",
         timeout: int | None = None,
     ) -> dict:
-        """调用 Exa Code Context 端点获取代码上下文。"""
+        """调用 Exa Code Context 端点获取代码上下文。
+
+        注意：/context 已不在 Exa 官方文档与 OpenAPI spec 中，属无文档端点，
+        当前仍在线但可能随时下线；下线后本工具将返回错误。
+        """
         payload = build_context_payload(query, tokens_num=tokens_num)
         if timeout is None:
             timeout = self.config.get("timeout_seconds", MIN_TIMEOUT_SECONDS)
@@ -801,11 +861,15 @@ class ExaWebSearchPlugin(Star):
             yield event.plain_result("Agent 任务功能未初始化，请检查插件配置和日志。")
             return
         try:
+            query, continue_task_id = parse_research_request(
+                extract_exa_payload(event.get_message_str())
+            )
             outcome = await service.create_task(
-                parse_research_query(extract_exa_payload(event.get_message_str())),
+                query,
                 notification_session=event.unified_msg_origin,
                 notification_scene=_notification_scene(event),
                 notification_message_id=_notification_message_id(event),
+                previous_task_id=continue_task_id,
             )
             capacity = await service.capacity_status()
         except ConcurrencyLimitError as exc:
@@ -962,6 +1026,30 @@ class ExaWebSearchPlugin(Star):
             text += f"\n\n{capacity.warning}"
         yield event.plain_result(text)
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @exa_admin_group.command("stop")
+    async def exa_stop_command(self, event: AstrMessageEvent, task_id: str = ""):
+        """优雅停止运行中的 Agent 任务，保留已收集结果。"""
+        service = self._task_service
+        if service is None:
+            yield event.plain_result("Agent 任务功能未初始化，请检查插件配置和日志。")
+            return
+        if not task_id.strip():
+            yield event.plain_result("用法：/exa stop <任务号>")
+            return
+        try:
+            task = await service.stop_task(task_id.strip())
+            capacity = await service.capacity_status()
+        except Exception as exc:
+            yield event.plain_result(f"停止任务失败：{exc}")
+            return
+        text = f"任务 {task.task_id} 状态：{task.status}"
+        if task.error:
+            text += f"\n\n{task.error}"
+        if capacity.warning:
+            text += f"\n\n{capacity.warning}"
+        yield event.plain_result(text)
+
     @session_waiter(timeout=60, record_history_chains=False)
     async def _confirm_clean(
         self, controller: SessionController, event: AstrMessageEvent
@@ -1013,17 +1101,19 @@ class ExaWebSearchPlugin(Star):
             "  /exa SpaceX 最新估值\n"
             "\n"
             "管理员指令:\n"
-            "  /exa -r <研究问题>       创建 Agent 任务\n"
+            "  /exa -r <研究问题> [--continue <任务号>]  创建 Agent 任务\n"
             "  /exa -s [筛选词]         查询本地任务\n"
             "  /exa stats <任务号>      查看任务状态\n"
             "  /exa stats -q <任务号>   发送 Markdown 归档\n"
             "  /exa clean <任务号|all>  清理终态任务\n"
             "  /exa cancel <任务号>     取消活动任务\n"
+            "  /exa stop <任务号>      优雅停止并保留结果（仅 ultra 档）\n"
             "调用方式:\n"
             "  - /exa 指令：直接搜索并返回结果\n"
             "  - LLM Tool：模型自动调用 exa-search\n"
             "  - LLM Tool：模型自动调用 exa-code-context\n"
             "  - LLM Tool：模型自动调用 web_fetch_exa\n"
+            "  - LLM Tool：模型自动调用 exa-agent-search（后台任务）\n"
             "\n"
             f"当前配置:\n"
             f"  API Key: {key_status}\n"
