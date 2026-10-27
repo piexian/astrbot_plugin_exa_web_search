@@ -11,6 +11,8 @@ description: 使用 Exa Code 和 Exa 搜索代码示例与技术文档。从 Git
 - `exa-search` — 通用技术资料和网页搜索
 - `web_fetch_exa` — 提取文档/代码页面的完整内容
 
+> 注意：`exa-code-context` 依赖的 Exa `/context` 端点已不在官方文档中，属无文档端点，可能随时下线；下线时改用 `exa-search`（lite 类型 + 代码查询词）。
+
 ## 适用场景
 
 - API 用法和语法

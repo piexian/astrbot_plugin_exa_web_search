@@ -216,6 +216,10 @@ class ExaPublicService:
         end_published_date: str = "",
         user_location: str = "",
         moderation: bool | None = None,
+        objective: str = "",
+        system_prompt: str = "",
+        output_schema: object = None,
+        user_identifier: str = "",
         timeout: int | None = None,
     ) -> list[dict[str, Any]]:
         """联网搜索；完整委托 _exa_search，无指令自动重试，返回底层结果列表。"""
@@ -231,6 +235,10 @@ class ExaPublicService:
             end_published_date=end_published_date,
             user_location=user_location,
             moderation=moderation,
+            objective=objective,
+            system_prompt=system_prompt,
+            output_schema=output_schema,
+            user_identifier=user_identifier,
             timeout=timeout,
         )
 
@@ -292,6 +300,9 @@ class ExaPublicService:
         *,
         event=None,
         notify: bool = False,
+        effort: str = "",
+        output_schema: dict[str, Any] | None = None,
+        previous_task_id: str = "",
     ) -> dict[str, Any]:
         """创建 Agent 任务；归属在本地预约时落盘，先于任何收费远端请求。
 
@@ -316,6 +327,9 @@ class ExaPublicService:
             notification_session=session,
             notification_scene=scene,
             notification_message_id=message_id,
+            effort=str(effort or "").strip(),
+            output_schema=output_schema,
+            previous_task_id=str(previous_task_id or "").strip(),
         )
         return {"task": task_snapshot(outcome.task), "warning": outcome.warning}
 

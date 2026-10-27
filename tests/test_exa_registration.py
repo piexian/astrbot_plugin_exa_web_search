@@ -296,7 +296,7 @@ class ExaCommandRegistrationTests(unittest.TestCase):
         group = self.module.ExaWebSearchPlugin.exa_admin_group
         self.assertEqual(group.command_name, "exa")
         self.assertTrue(group.permission_required)
-        expected = {"-r", "-s", "stats", "clean", "cancel"}
+        expected = {"-r", "-s", "stats", "clean", "cancel", "stop"}
         self.assertEqual(set(group.commands), expected)
         for command in group.commands.values():
             with self.subTest(command=getattr(command, "__command_name__", "")):
@@ -744,6 +744,141 @@ class ExaRequestSafetyTests(unittest.IsolatedAsyncioTestCase):
                     result = await plugin._search_with_retry("test")
                 self.assertTrue(result["ok"])
                 sleeper.assert_awaited_once_with(expected)
+
+
+    def test_four_llm_tools_are_registered_including_agent_search(self):
+        context = FakeContext()
+        self.module.ExaWebSearchPlugin(context, {})
+        self.assertEqual(
+            sorted(tool.name for tool in context.tools),
+            ["exa-agent-search", "exa-code-context", "exa-search", "web_fetch_exa"],
+        )
+        agent_tool = next(
+            tool for tool in context.tools if tool.name == "exa-agent-search"
+        )
+        self.assertIn("effort", agent_tool.parameters["properties"])
+        self.assertIn("output_schema", agent_tool.parameters["properties"])
+        self.assertIn("continue_from", agent_tool.parameters["properties"])
+        self.assertEqual(agent_tool.parameters["required"], ["query"])
+
+
+class ExaAgentSearchToolTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        _install_stubs()
+        importlib.import_module(MODULE_NAME)
+        from astrbot_plugin_exa_web_search.tools.exa_tools import (
+            ExaAgentSearchTool,
+            build_search_tool_payload,
+        )
+
+        cls.tool_type = ExaAgentSearchTool
+        cls.build_payload = staticmethod(build_search_tool_payload)
+
+    @staticmethod
+    def _event():
+        return SimpleNamespace(
+            unified_msg_origin="qq:group_1:session",
+            get_platform_name=lambda: "qq",
+            get_sender_id=lambda: "42",
+        )
+
+    def _tool(self, service):
+        plugin = SimpleNamespace(_task_service=service, config={})
+        return self.tool_type(plugin=plugin)
+
+    async def test_returns_task_id_immediately_without_polling(self):
+        import json as _json
+
+        created = {}
+        record = TaskRecord(
+            task_id="r-20260924-0007",
+            run_id=None,
+            key_slot=0,
+            status="queued",
+            query="research q",
+            created_at="",
+            updated_at="",
+        )
+
+        class Service:
+            async def create_task(self, query, **kwargs):
+                created.update(kwargs)
+                created["query"] = query
+                return SimpleNamespace(task=record, warning="")
+
+        result = await self._tool(Service()).run(
+            self._event(),
+            "research q",
+            effort="high",
+            output_schema={"type": "object"},
+            continue_from="r-1",
+        )
+
+        payload = _json.loads(result)
+        self.assertEqual(payload["task_id"], "r-20260924-0007")
+        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(created["query"], "research q")
+        self.assertEqual(created["effort"], "high")
+        self.assertEqual(created["output_schema"], {"type": "object"})
+        self.assertEqual(created["previous_task_id"], "r-1")
+        self.assertEqual(created["notification_session"], "qq:group_1:session")
+
+    async def test_missing_service_maps_to_agent_unavailable(self):
+        result = await self._tool(None).run(self._event(), "q")
+        self.assertTrue(result.startswith("Error: agent_unavailable:"))
+
+    async def test_missing_continue_target_maps_to_task_not_found(self):
+        from astrbot_plugin_exa_web_search.tools.exa_tasks import TaskNotFoundError
+
+        class Service:
+            async def create_task(self, query, **kwargs):
+                raise TaskNotFoundError("任务不存在: r-9")
+
+        result = await self._tool(Service()).run(
+            self._event(), "q", continue_from="r-9"
+        )
+        self.assertTrue(result.startswith("Error: task_not_found:"))
+
+    async def test_invalid_schema_maps_to_invalid_request(self):
+        class Service:
+            async def create_task(self, query, **kwargs):
+                raise ValueError("output_schema 必须是非空 JSON 对象")
+
+        result = await self._tool(Service()).run(self._event(), "q", output_schema=[])
+        self.assertTrue(result.startswith("Error: invalid_request:"))
+
+    async def test_concurrency_limit_maps_to_dedicated_code(self):
+        from astrbot_plugin_exa_web_search.tools.exa_tasks import ConcurrencyLimitError
+
+        class Service:
+            async def create_task(self, query, **kwargs):
+                raise ConcurrencyLimitError("Agent 并发任务已达到上限（2）。")
+
+        result = await self._tool(Service()).run(self._event(), "q")
+        self.assertTrue(result.startswith("Error: concurrency_limit:"))
+
+    def test_build_search_tool_payload_keeps_notices_and_output(self):
+        payload = self.build_payload(
+            {
+                "results": [{"url": "u"}],
+                "notices": [{"code": "X"}],
+                "output": {"content": "answer"},
+            }
+        )
+        self.assertEqual(
+            payload,
+            {
+                "results": [{"url": "u"}],
+                "notices": [{"code": "X"}],
+                "output": {"content": "answer"},
+            },
+        )
+        self.assertEqual(self.build_payload({"results": []}), {"results": []})
+        self.assertEqual(
+            self.build_payload({"results": [1], "notices": [], "output": {}}),
+            {"results": [1]},
+        )
 
 
 if __name__ == "__main__":

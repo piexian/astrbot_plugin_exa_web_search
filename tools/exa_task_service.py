@@ -16,6 +16,7 @@ from .exa_agent import (
     ExaAgentClient,
     RemoteAgentRun,
     normalize_remote_run,
+    normalize_agent_output_schema,
     redact_secret,
     sources_from_events,
 )
@@ -83,6 +84,7 @@ class AgentTaskService:
         status_retry_limit: int = 5,
         effort: str = "auto",
         budget_max_dollars: float | None = 5.0,
+        budget_max_duration_seconds: int | None = None,
         archive_event_pages: int = 10,
         notification_sender: (
             Callable[[TaskRecord, str], Awaitable[None]] | None
@@ -112,6 +114,7 @@ class AgentTaskService:
         self.status_retry_limit = max(1, int(status_retry_limit))
         self.effort = effort
         self.budget_max_dollars = budget_max_dollars
+        self.budget_max_duration_seconds = budget_max_duration_seconds
         self.archive_event_pages = max(1, int(archive_event_pages))
         self._key_index = 0
         self._key_lock = asyncio.Lock()
@@ -163,6 +166,9 @@ class AgentTaskService:
         notification_session: str = "",
         notification_scene: str = "",
         notification_message_id: str = "",
+        effort: str = "",
+        output_schema: dict[str, Any] | None = None,
+        previous_task_id: str = "",
     ) -> TaskCreationOutcome:
         text = str(query or "").strip()
         if not text:
@@ -170,6 +176,23 @@ class AgentTaskService:
         if not self._started:
             raise RuntimeError("Agent 任务服务尚未初始化。")
         await self.ensure_capacity()
+        previous_run_id = ""
+        previous_ref = str(previous_task_id or "").strip()
+        if previous_ref:
+            previous_task = await self.archive.resolve_task(previous_ref)
+            if previous_task.status != "completed":
+                raise ValueError(
+                    f"--continue 仅支持已完成任务，"
+                    f"{previous_task.task_id} 状态为 {previous_task.status}。"
+                )
+            if not previous_task.run_id:
+                raise ValueError(
+                    f"--continue 任务 {previous_task.task_id} 缺少远端 Run ID。"
+                )
+            previous_run_id = previous_task.run_id
+        if output_schema is not None:
+            output_schema = normalize_agent_output_schema(output_schema)
+        run_effort = str(effort or "").strip() or self.effort
         key_slot = await self._next_key_slot()
         api_key = self._key_for_slot(key_slot)
         task = await self.archive.reserve_task(
@@ -186,8 +209,11 @@ class AgentTaskService:
             remote = await self.client.create_run(
                 text,
                 api_key,
-                effort=self.effort,
+                effort=run_effort,
                 budget_max_dollars=self.budget_max_dollars,
+                budget_max_duration_seconds=self.budget_max_duration_seconds,
+                output_schema=output_schema,
+                previous_run_id=previous_run_id,
                 metadata={"task_id": task.task_id},
             )
         except ExaAgentAPIError as exc:
@@ -265,6 +291,17 @@ class AgentTaskService:
         return TaskStatsResult(task, remote_error)
 
     async def cancel_task(self, task_id: str, *, exact: bool = False) -> TaskRecord:
+        """Cancel a queued or running task, discarding remote work."""
+        return await self._terminate_task(task_id, stop=False, exact=exact)
+
+    async def stop_task(self, task_id: str, *, exact: bool = False) -> TaskRecord:
+        """Gracefully stop a running task, keeping gathered results."""
+        return await self._terminate_task(task_id, stop=True, exact=exact)
+
+    async def _terminate_task(
+        self, task_id: str, *, stop: bool, exact: bool = False
+    ) -> TaskRecord:
+        action = "停止" if stop else "取消"
         task = await (
             self.archive.get_task(task_id)
             if exact
@@ -278,7 +315,7 @@ class AgentTaskService:
                 self._schedule_reconciliation(task.task_id)
                 return await self.archive.update_task(
                     task.task_id,
-                    error="远端 Run 尚未确认，未执行取消；后台将继续核对。",
+                    error=f"远端 Run 尚未确认，未执行{action}；后台将继续核对。",
                 )
             task = await self._apply_remote_run(
                 task.task_id, remote, self._key_for_task(task)
@@ -286,17 +323,21 @@ class AgentTaskService:
         if not task.is_active:
             return task
         if not task.run_id:
-            raise RuntimeError("远端 Run 尚未确认，无法取消。")
+            raise RuntimeError(f"远端 Run 尚未确认，无法{action}。")
         api_key = self._key_for_task(task)
         try:
-            remote = await self.client.cancel_run(task.run_id, api_key)
+            remote = (
+                await self.client.stop_run(task.run_id, api_key)
+                if stop
+                else await self.client.cancel_run(task.run_id, api_key)
+            )
         except ExaAgentAPIError as exc:
             error = redact_secret(str(exc), api_key)
             if exc.status == 404:
                 self._schedule_monitor(task.task_id)
                 return await self.archive.update_task(
                     task.task_id,
-                    error="取消接口暂时返回 404，任务仍保持活动状态并继续监控。",
+                    error=f"{action}接口暂时返回 404，任务仍保持活动状态并继续监控。",
                 )
             if exc.outcome_uncertain:
                 return await self.archive.update_task(task.task_id, error=error)

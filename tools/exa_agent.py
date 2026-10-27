@@ -18,6 +18,15 @@ _COST_FIELDS = (
     "phoneNumbers",
     "dataSources",
 )
+AGENT_EFFORTS = frozenset(
+    {"minimal", "low", "medium", "high", "xhigh", "auto", "ultra"}
+)
+_LEGACY_EFFORT_ALIASES = {"max": "ultra"}
+_BUDGET_EFFORTS = frozenset({"auto", "ultra"})
+MIN_BUDGET_DOLLARS = 1.0
+MAX_BUDGET_DOLLARS = 100.0
+MIN_BUDGET_DURATION_SECONDS = 300
+MAX_BUDGET_DURATION_SECONDS = 10800
 _SOURCE_FIELDS = ("url", "title", "snippet", "field", "confidence")
 
 
@@ -74,6 +83,48 @@ def redact_secret(value: Any, secret: str) -> str:
         text = text.replace(secret, "***")
     return text
 
+
+
+def normalize_agent_effort(value: object) -> str:
+    """Normalize current and legacy Agent effort levels."""
+    effort = str(value or "").strip().lower()
+    effort = _LEGACY_EFFORT_ALIASES.get(effort, effort)
+    return effort if effort in AGENT_EFFORTS else "auto"
+
+
+def normalize_budget_dollars(value: object) -> float | None:
+    """Clamp a budget to Exa's $1-$100 window; below $1 means API default."""
+    try:
+        budget = float(value)
+    except (TypeError, ValueError):
+        return None
+    if budget < MIN_BUDGET_DOLLARS:
+        return None
+    return min(budget, MAX_BUDGET_DOLLARS)
+
+
+def normalize_budget_duration_seconds(value: object) -> int | None:
+    """Clamp an ultra time budget to Exa's 300-10800s window."""
+    try:
+        duration = int(value)
+    except (TypeError, ValueError):
+        return None
+    if duration <= 0:
+        return None
+    return max(MIN_BUDGET_DURATION_SECONDS, min(duration, MAX_BUDGET_DURATION_SECONDS))
+
+
+def normalize_agent_output_schema(value: object) -> dict[str, Any]:
+    """Validate an Agent outputSchema; must be a JSON Schema object."""
+    schema = value
+    if isinstance(schema, str) and schema.strip():
+        try:
+            schema = json.loads(schema)
+        except ValueError as exc:
+            raise ValueError("output_schema 必须是合法的 JSON Schema 对象") from exc
+    if not isinstance(schema, dict) or not schema:
+        raise ValueError("output_schema 必须是非空 JSON 对象")
+    return schema
 
 def _error_fields(
     data: Any, headers: dict[str, str] | None = None
@@ -257,13 +308,27 @@ class ExaAgentClient:
         *,
         effort: str = "auto",
         budget_max_dollars: float | None = None,
+        budget_max_duration_seconds: int | None = None,
+        output_schema: dict[str, Any] | None = None,
+        previous_run_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> RemoteAgentRun:
-        payload: dict[str, Any] = {"query": query, "effort": effort}
+        normalized_effort = normalize_agent_effort(effort)
+        payload: dict[str, Any] = {"query": query, "effort": normalized_effort}
         if metadata:
             payload["metadata"] = metadata
-        if budget_max_dollars is not None and effort in {"auto", "max"}:
-            payload["budget"] = {"maxCostDollars": budget_max_dollars}
+        previous_run_id = str(previous_run_id or "").strip()
+        if previous_run_id:
+            payload["previousRunId"] = previous_run_id
+        if output_schema:
+            payload["outputSchema"] = output_schema
+        budget = normalize_budget_dollars(budget_max_dollars)
+        if budget is not None and normalized_effort in _BUDGET_EFFORTS:
+            budget_payload: dict[str, Any] = {"maxCostDollars": budget}
+            duration = normalize_budget_duration_seconds(budget_max_duration_seconds)
+            if duration is not None and normalized_effort == "ultra":
+                budget_payload["maxDurationSeconds"] = duration
+            payload["budget"] = budget_payload
         data = await self._request(
             "POST",
             "/agent/runs",
@@ -357,6 +422,20 @@ class ExaAgentClient:
         except (TypeError, ValueError) as exc:
             raise ExaAgentAPIError("Exa Agent 取消响应无法解析。", status=200) from exc
 
+
+
+    async def stop_run(self, run_id: str, api_key: str) -> RemoteAgentRun:
+        """Gracefully stop a run and keep the results gathered so far."""
+        data = await self._request(
+            "POST",
+            f"/agent/runs/{quote(run_id, safe='')}/stop",
+            api_key,
+            uncertain_on_server_error=True,
+        )
+        try:
+            return normalize_remote_run(data)
+        except (TypeError, ValueError) as exc:
+            raise ExaAgentAPIError("Exa Agent 停止响应无法解析。", status=200) from exc
     async def _request(
         self,
         method: str,

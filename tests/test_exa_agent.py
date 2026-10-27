@@ -200,5 +200,120 @@ class ExaAgentClientTests(unittest.IsolatedAsyncioTestCase):
             normalize_remote_run(payload)
 
 
+
+class AgentEffortBudgetContractTests(unittest.TestCase):
+    def test_effort_includes_ultra_and_maps_legacy_max(self):
+        from tools.exa_agent import (
+            AGENT_EFFORTS,
+            normalize_agent_effort,
+        )
+
+        self.assertIn("ultra", AGENT_EFFORTS)
+        self.assertNotIn("max", AGENT_EFFORTS)
+        self.assertEqual(normalize_agent_effort("max"), "ultra")
+        self.assertEqual(normalize_agent_effort("MAX"), "ultra")
+        self.assertEqual(normalize_agent_effort("xhigh"), "xhigh")
+        self.assertEqual(normalize_agent_effort("bogus"), "auto")
+
+    def test_budget_clamps_into_official_window(self):
+        from tools.exa_agent import normalize_budget_dollars
+
+        self.assertIsNone(normalize_budget_dollars(None))
+        self.assertIsNone(normalize_budget_dollars(0))
+        self.assertIsNone(normalize_budget_dollars(0.5))
+        self.assertEqual(normalize_budget_dollars(1), 1.0)
+        self.assertEqual(normalize_budget_dollars(50), 50.0)
+        self.assertEqual(normalize_budget_dollars(1000), 100.0)
+
+    def test_duration_clamps_into_official_window(self):
+        from tools.exa_agent import normalize_budget_duration_seconds
+
+        self.assertIsNone(normalize_budget_duration_seconds(None))
+        self.assertIsNone(normalize_budget_duration_seconds(0))
+        self.assertEqual(normalize_budget_duration_seconds(10), 300)
+        self.assertEqual(normalize_budget_duration_seconds(600), 600)
+        self.assertEqual(normalize_budget_duration_seconds(20000), 10800)
+
+    def test_output_schema_requires_json_object(self):
+        from tools.exa_agent import normalize_agent_output_schema
+
+        self.assertEqual(
+            normalize_agent_output_schema({"type": "object"}), {"type": "object"}
+        )
+        self.assertEqual(
+            normalize_agent_output_schema('{"type":"object"}'), {"type": "object"}
+        )
+        for bad in ([], {}, "[]", "null", 3):
+            with self.subTest(bad=bad):
+                self.assertRaises(ValueError, normalize_agent_output_schema, bad)
+
+
+class AgentCreateRunContractTests(unittest.IsolatedAsyncioTestCase):
+
+    async def test_ultra_run_carries_budget_duration_schema_and_previous(self):
+        session = FakeSession(FakeResponse(payload=completed_run()))
+        client = ExaAgentClient(session, "https://api.exa.ai")
+        await client.create_run(
+            "q",
+            "k",
+            effort="ultra",
+            budget_max_dollars=50,
+            budget_max_duration_seconds=600,
+            output_schema={"type": "object"},
+            previous_run_id="agent_run_prev",
+            metadata={"task_id": "t"},
+        )
+        payload = session.calls[0]["json"]
+        self.assertEqual(payload["effort"], "ultra")
+        self.assertEqual(
+            payload["budget"], {"maxCostDollars": 50, "maxDurationSeconds": 600}
+        )
+        self.assertEqual(payload["outputSchema"], {"type": "object"})
+        self.assertEqual(payload["previousRunId"], "agent_run_prev")
+        self.assertEqual(payload["metadata"], {"task_id": "t"})
+
+    async def test_legacy_max_maps_to_ultra_and_keeps_budget(self):
+        session = FakeSession(FakeResponse(payload=completed_run()))
+        client = ExaAgentClient(session, "https://api.exa.ai")
+        await client.create_run("q", "k", effort="max", budget_max_dollars=3)
+        payload = session.calls[0]["json"]
+        self.assertEqual(payload["effort"], "ultra")
+        self.assertEqual(payload["budget"], {"maxCostDollars": 3.0})
+
+    async def test_budget_skipped_for_other_efforts_and_below_one_dollar(self):
+        session = FakeSession(
+            FakeResponse(payload=completed_run()),
+            FakeResponse(payload=completed_run()),
+            FakeResponse(payload=completed_run()),
+        )
+        client = ExaAgentClient(session, "https://api.exa.ai")
+        await client.create_run(
+            "q", "k", effort="high", budget_max_dollars=3, budget_max_duration_seconds=600
+        )
+        self.assertNotIn("budget", session.calls[0]["json"])
+        await client.create_run("q", "k", effort="auto", budget_max_dollars=5)
+        self.assertEqual(
+            session.calls[1]["json"]["budget"], {"maxCostDollars": 5.0}
+        )
+        await client.create_run("q", "k", effort="ultra", budget_max_dollars=0.2)
+        self.assertNotIn("budget", session.calls[2]["json"])
+
+    async def test_default_payload_stays_minimal(self):
+        session = FakeSession(FakeResponse(payload=completed_run()))
+        client = ExaAgentClient(session, "https://api.exa.ai")
+        await client.create_run("q", "k")
+        self.assertEqual(
+            session.calls[0]["json"], {"query": "q", "effort": "auto"}
+        )
+
+    async def test_stop_run_posts_to_stop_endpoint(self):
+        session = FakeSession(FakeResponse(payload=completed_run()))
+        client = ExaAgentClient(session, "https://api.exa.ai")
+        run = await client.stop_run("agent_run_123", "k")
+        call = session.calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertTrue(call["url"].endswith("/agent/runs/agent_run_123/stop"))
+        self.assertEqual(run.run_id, "agent_run_123")
+
 if __name__ == "__main__":
     unittest.main()
