@@ -1,4 +1,5 @@
 """Pure parsers for Exa command routing."""
+
 from __future__ import annotations
 
 import re
@@ -51,7 +52,6 @@ def parse_research_query(value: str) -> str:
     return text
 
 
-
 _CONTINUE_RE = re.compile(r"\s+--continue[=\s]\s*(\S+)\s*$", re.IGNORECASE)
 
 
@@ -70,6 +70,7 @@ def parse_research_request(value: str) -> tuple[str, str]:
     if not continue_task_id and text.lower().endswith("--continue"):
         raise ValueError("--continue 后必须提供任务号。")
     return text, continue_task_id
+
 
 def parse_stats_query(value: str) -> tuple[bool, str]:
     """Parse `task_id` or `-q task_id` and return (export, task_id)."""

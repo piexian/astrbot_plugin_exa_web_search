@@ -200,7 +200,6 @@ class ExaAgentClientTests(unittest.IsolatedAsyncioTestCase):
             normalize_remote_run(payload)
 
 
-
 class AgentEffortBudgetContractTests(unittest.TestCase):
     def test_effort_includes_ultra_and_maps_legacy_max(self):
         from tools.exa_agent import (
@@ -249,7 +248,6 @@ class AgentEffortBudgetContractTests(unittest.TestCase):
 
 
 class AgentCreateRunContractTests(unittest.IsolatedAsyncioTestCase):
-
     async def test_ultra_run_carries_budget_duration_schema_and_previous(self):
         session = FakeSession(FakeResponse(payload=completed_run()))
         client = ExaAgentClient(session, "https://api.exa.ai")
@@ -288,13 +286,15 @@ class AgentCreateRunContractTests(unittest.IsolatedAsyncioTestCase):
         )
         client = ExaAgentClient(session, "https://api.exa.ai")
         await client.create_run(
-            "q", "k", effort="high", budget_max_dollars=3, budget_max_duration_seconds=600
+            "q",
+            "k",
+            effort="high",
+            budget_max_dollars=3,
+            budget_max_duration_seconds=600,
         )
         self.assertNotIn("budget", session.calls[0]["json"])
         await client.create_run("q", "k", effort="auto", budget_max_dollars=5)
-        self.assertEqual(
-            session.calls[1]["json"]["budget"], {"maxCostDollars": 5.0}
-        )
+        self.assertEqual(session.calls[1]["json"]["budget"], {"maxCostDollars": 5.0})
         await client.create_run("q", "k", effort="ultra", budget_max_dollars=0.2)
         self.assertNotIn("budget", session.calls[2]["json"])
 
@@ -302,9 +302,7 @@ class AgentCreateRunContractTests(unittest.IsolatedAsyncioTestCase):
         session = FakeSession(FakeResponse(payload=completed_run()))
         client = ExaAgentClient(session, "https://api.exa.ai")
         await client.create_run("q", "k")
-        self.assertEqual(
-            session.calls[0]["json"], {"query": "q", "effort": "auto"}
-        )
+        self.assertEqual(session.calls[0]["json"], {"query": "q", "effort": "auto"})
 
     async def test_stop_run_posts_to_stop_endpoint(self):
         session = FakeSession(FakeResponse(payload=completed_run()))
@@ -314,6 +312,7 @@ class AgentCreateRunContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["method"], "POST")
         self.assertTrue(call["url"].endswith("/agent/runs/agent_run_123/stop"))
         self.assertEqual(run.run_id, "agent_run_123")
+
 
 if __name__ == "__main__":
     unittest.main()

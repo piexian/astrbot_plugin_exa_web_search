@@ -745,7 +745,6 @@ class ExaRequestSafetyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result["ok"])
                 sleeper.assert_awaited_once_with(expected)
 
-
     def test_four_llm_tools_are_registered_including_agent_search(self):
         context = FakeContext()
         self.module.ExaWebSearchPlugin(context, {})

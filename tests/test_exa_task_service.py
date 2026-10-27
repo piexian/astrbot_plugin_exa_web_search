@@ -109,7 +109,6 @@ class FakeAgentClient:
             raise self.cancel_response
         return self.cancel_response
 
-
     async def stop_run(self, run_id, api_key):
         self.stop_calls.append((run_id, api_key))
         if isinstance(self.stop_response, Exception):
@@ -567,7 +566,6 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored.status, "interrupted")
         self.assertEqual(self.client.create_calls, [])
 
-
     async def test_stop_task_uses_bound_key_and_applies_remote_state(self):
         task = await self.archive.reserve_task("stop me", 0, 2)
         await self.archive.update_task(
@@ -618,9 +616,7 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         first = await self.service.create_task("still running")
 
         with self.assertRaises(ValueError):
-            await self.service.create_task(
-                "again", previous_task_id=first.task.task_id
-            )
+            await self.service.create_task("again", previous_task_id=first.task.task_id)
 
     async def test_create_rejects_invalid_output_schema(self):
         with self.assertRaises(ValueError):

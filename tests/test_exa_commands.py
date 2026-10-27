@@ -64,7 +64,6 @@ class ExaCommandParsingTests(unittest.TestCase):
                 self.assertFalse(is_reserved_exa_query(query))
 
 
-
 class ParseResearchRequestTests(unittest.TestCase):
     def test_extracts_trailing_continue_task_id(self):
         from tools.exa_commands import parse_research_request
@@ -95,6 +94,7 @@ class ParseResearchRequestTests(unittest.TestCase):
         for bad in ("找AI公司 --continue", "--continue r-1", "-r --continue r-1", ""):
             with self.subTest(bad=bad):
                 self.assertRaises(ValueError, parse_research_request, bad)
+
 
 if __name__ == "__main__":
     unittest.main()

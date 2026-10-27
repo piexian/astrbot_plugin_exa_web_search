@@ -375,9 +375,7 @@ class ExaWebSearchPlugin(Star):
                     minimum=0.001,
                     maximum=100000.0,
                 )
-                effort = normalize_agent_effort(
-                    self.config.get("agent_effort", "auto")
-                )
+                effort = normalize_agent_effort(self.config.get("agent_effort", "auto"))
                 budget = normalize_budget_dollars(
                     _normalize_float(
                         self.config.get("agent_budget_max_dollars", 5),
@@ -1027,7 +1025,6 @@ class ExaWebSearchPlugin(Star):
         if capacity.warning:
             text += f"\n\n{capacity.warning}"
         yield event.plain_result(text)
-
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @exa_admin_group.command("stop")

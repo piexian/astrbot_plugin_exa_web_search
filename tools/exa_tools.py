@@ -5,10 +5,9 @@ from typing import Any
 from astrbot.api import FunctionTool
 from astrbot.api.event import AstrMessageEvent
 
+from .exa_agent import AGENT_EFFORTS
 from .exa_context import format_context_result
 from .exa_search import SEARCH_CATEGORIES, SEARCH_TYPES, normalize_search_type
-from .exa_agent import AGENT_EFFORTS
-
 
 
 def build_search_tool_payload(data: dict) -> dict:
@@ -21,6 +20,7 @@ def build_search_tool_payload(data: dict) -> dict:
     if isinstance(output, dict) and output:
         payload["output"] = output
     return payload
+
 
 @dataclass
 class ExaSearchTool(FunctionTool):

@@ -189,7 +189,9 @@ def build_search_payload(
         ]
         if unsupported:
             names = ", ".join(unsupported)
-            raise ValueError(f'Exa search type "lite" 不支持参数: {names}。可改用 auto 类型')
+            raise ValueError(
+                f'Exa search type "lite" 不支持参数: {names}。可改用 auto 类型'
+            )
 
     payload: dict = {
         "query": query,

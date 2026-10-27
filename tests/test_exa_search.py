@@ -124,7 +124,6 @@ class ExaSearchContractTests(unittest.TestCase):
         self.assertEqual(resolve_timeout_seconds(120, "deep-reasoning"), 120)
 
 
-
 class ExaSearchNewParamTests(unittest.TestCase):
     def test_lite_is_a_valid_type_with_parameter_whitelist(self):
         from tools.exa_search import build_search_payload
@@ -161,9 +160,7 @@ class ExaSearchNewParamTests(unittest.TestCase):
     def test_output_schema_root_type_must_be_text_or_object(self):
         from tools.exa_search import normalize_output_schema
 
-        self.assertEqual(
-            normalize_output_schema({"type": "text"}), {"type": "text"}
-        )
+        self.assertEqual(normalize_output_schema({"type": "text"}), {"type": "text"})
         self.assertEqual(
             normalize_output_schema('{"type":"object"}'), {"type": "object"}
         )
@@ -189,6 +186,7 @@ class ExaSearchNewParamTests(unittest.TestCase):
         default = build_search_payload("q")
         for key in ("objective", "systemPrompt", "userIdentifier", "outputSchema"):
             self.assertNotIn(key, default)
+
 
 if __name__ == "__main__":
     unittest.main()

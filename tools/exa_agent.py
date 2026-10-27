@@ -84,7 +84,6 @@ def redact_secret(value: Any, secret: str) -> str:
     return text
 
 
-
 def normalize_agent_effort(value: object) -> str:
     """Normalize current and legacy Agent effort levels."""
     effort = str(value or "").strip().lower()
@@ -125,6 +124,7 @@ def normalize_agent_output_schema(value: object) -> dict[str, Any]:
     if not isinstance(schema, dict) or not schema:
         raise ValueError("output_schema 必须是非空 JSON 对象")
     return schema
+
 
 def _error_fields(
     data: Any, headers: dict[str, str] | None = None
@@ -422,8 +422,6 @@ class ExaAgentClient:
         except (TypeError, ValueError) as exc:
             raise ExaAgentAPIError("Exa Agent 取消响应无法解析。", status=200) from exc
 
-
-
     async def stop_run(self, run_id: str, api_key: str) -> RemoteAgentRun:
         """Gracefully stop a run and keep the results gathered so far."""
         data = await self._request(
@@ -436,6 +434,7 @@ class ExaAgentClient:
             return normalize_remote_run(data)
         except (TypeError, ValueError) as exc:
             raise ExaAgentAPIError("Exa Agent 停止响应无法解析。", status=200) from exc
+
     async def _request(
         self,
         method: str,
