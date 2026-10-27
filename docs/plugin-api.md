@@ -43,6 +43,7 @@ context_data = await service.code_context("how to parse yaml", tokens_num="dynam
 | 方法 | 可选参数 | 返回 |
 |---|---|---|
 | `search(query, ...)` | `num_results/search_type/category/include_domains/exclude_domains/start_published_date/end_published_date/user_location/moderation/objective/system_prompt/output_schema/user_identifier/timeout` | 结果列表 |
+| `search_response(query, ...)` | 同 `search` | 完整响应字典（results/notices/output；`output_schema` 合成输出从这里取） |
 | `fetch(url, ...)` | `max_characters/max_age_hours/timeout` | 内容列表 |
 | `code_context(query, ...)` | `tokens_num/timeout` | 业务字典 |
 

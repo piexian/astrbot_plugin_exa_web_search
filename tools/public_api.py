@@ -243,6 +243,46 @@ class ExaPublicService:
         )
 
     @_submission
+    async def search_response(
+        self,
+        query: str,
+        *,
+        num_results: int = 10,
+        search_type: str = "auto",
+        category: str = "",
+        include_domains: str = "",
+        exclude_domains: str = "",
+        start_published_date: str = "",
+        end_published_date: str = "",
+        user_location: str = "",
+        moderation: bool | None = None,
+        objective: str = "",
+        system_prompt: str = "",
+        output_schema: object = None,
+        user_identifier: str = "",
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        """联网搜索并返回完整响应（results/notices/output 等）；合成输出用此入口。"""
+        self._require_ready()
+        return await self._plugin._exa_search_response(
+            query,
+            num_results=num_results,
+            search_type=search_type,
+            category=category,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+            start_published_date=start_published_date,
+            end_published_date=end_published_date,
+            user_location=user_location,
+            moderation=moderation,
+            objective=objective,
+            system_prompt=system_prompt,
+            output_schema=output_schema,
+            user_identifier=user_identifier,
+            timeout=timeout,
+        )
+
+    @_submission
     async def fetch(
         self,
         url: str,

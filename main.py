@@ -1107,7 +1107,7 @@ class ExaWebSearchPlugin(Star):
             "  /exa stats -q <任务号>   发送 Markdown 归档\n"
             "  /exa clean <任务号|all>  清理终态任务\n"
             "  /exa cancel <任务号>     取消活动任务\n"
-            "  /exa stop <任务号>      优雅停止并保留结果\n"
+            "  /exa stop <任务号>      优雅停止并保留结果（仅 ultra 档）\n"
             "调用方式:\n"
             "  - /exa 指令：直接搜索并返回结果\n"
             "  - LLM Tool：模型自动调用 exa-search\n"

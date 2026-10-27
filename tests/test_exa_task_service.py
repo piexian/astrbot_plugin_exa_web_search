@@ -618,6 +618,51 @@ class ExaTaskServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.service.create_task("again", previous_task_id=first.task.task_id)
 
+    async def test_continue_rejects_foreign_owner_via_sdk(self):
+        self.client.create_responses.append(remote("running"))
+        self.client.get_responses.append(remote("running"))
+        first = await self.service.create_task("owned", owner_plugin_id="other_plugin")
+
+        with self.assertRaises(ValueError):
+            await self.service.create_task(
+                "again",
+                owner_plugin_id="my_plugin",
+                previous_task_id=first.task.task_id,
+            )
+
+    async def test_command_path_may_continue_any_completed_task(self):
+        task = await self.archive.reserve_task(
+            "owned", 0, 2, owner_plugin_id="other_plugin"
+        )
+        await self.archive.update_task(
+            task.task_id, status="completed", run_id="agent_run_c"
+        )
+        self.client.create_responses.append(remote("running"))
+
+        outcome = await self.service.create_task(
+            "follow up", previous_task_id=task.task_id
+        )
+
+        self.assertEqual(
+            self.client.create_calls[-1][2]["previous_run_id"], "agent_run_c"
+        )
+        self.assertEqual(outcome.task.owner_plugin_id, "")
+
+    async def test_stop_rejection_adds_ultra_guidance(self):
+        task = await self.archive.reserve_task("auto stop", 0, 2)
+        await self.archive.update_task(
+            task.task_id, run_id="agent_run_s", status="running"
+        )
+        self.client.stop_response = ExaAgentAPIError(
+            "Exa Agent API [POST /agent/runs/agent_run_s/stop] HTTP 400", status=400
+        )
+
+        with self.assertRaises(ExaAgentAPIError) as caught:
+            await self.service.stop_task(task.task_id)
+
+        self.assertIn("ultra", str(caught.exception))
+        self.assertIn("/exa cancel", str(caught.exception))
+
     async def test_create_rejects_invalid_output_schema(self):
         with self.assertRaises(ValueError):
             await self.service.create_task("bad schema", output_schema=[])

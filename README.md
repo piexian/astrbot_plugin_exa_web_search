@@ -70,7 +70,7 @@ https://github.com/piexian/astrbot_plugin_exa_web_search
 /exa stats -q <任务号>   # 发送 Markdown 归档文件
 /exa clean <任务号|all>  # 清理终态任务（all 需确认）
 /exa cancel <任务号>     # 取消活动任务
-/exa stop <任务号>       # 优雅停止并保留已收集结果
+/exa stop <任务号>       # 优雅停止并保留已收集结果（仅 ultra 档，非 ultra 请用 cancel）
 ```
 
 任务结束后会自动返回一次“任务号 + 正文”；完整消息超过 1500 字符时改发以任务号命名、仅含任务号和正文的 Markdown 文件。普通 `stats` 不发送文件，只有显式使用 `stats -q` 才导出归档。

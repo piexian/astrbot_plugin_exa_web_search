@@ -180,6 +180,11 @@ class AgentTaskService:
         previous_ref = str(previous_task_id or "").strip()
         if previous_ref:
             previous_task = await self.archive.resolve_task(previous_ref)
+            if owner_plugin_id and previous_task.owner_plugin_id != owner_plugin_id:
+                raise ValueError(
+                    f"--continue 任务 {previous_task.task_id} 不属于当前调用方，"
+                    f"仅允许续跑自己归属的任务。"
+                )
             if previous_task.status != "completed":
                 raise ValueError(
                     f"--continue 仅支持已完成任务，"
@@ -341,6 +346,12 @@ class AgentTaskService:
                 )
             if exc.outcome_uncertain:
                 return await self.archive.update_task(task.task_id, error=error)
+            if stop and 400 <= exc.status < 500:
+                raise ExaAgentAPIError(
+                    f"停止请求被远端拒绝（HTTP {exc.status}）。"
+                    "官方 stop 仅支持 ultra 档运行；若任务非 ultra 档，请改用 /exa cancel。",
+                    status=exc.status,
+                ) from exc
             raise
         return await self._apply_remote_run(task.task_id, remote, api_key)
 
