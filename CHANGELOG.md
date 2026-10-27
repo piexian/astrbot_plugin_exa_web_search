@@ -1,5 +1,15 @@
 # 更新日志
 
+
+## v1.2.0 - 2026-10-28
+
+- 搜索新增 `lite` 类型与参数白名单校验；LLM Tool 与 SDK 新增可选 `objective`、`systemPrompt`、`outputSchema` 与匿名 `userIdentifier` 归因开关。
+- 搜索响应 `warnings` 记录日志，`notices` 与合成输出 `output` 透传给模型；SDK 新增 `search_response()` 返回完整响应。
+- Agent 对齐官方 2026Q4 变更：effort 新增 `ultra`（旧值 `max` 自动映射），费用预算夹取 $1-$100 且仅 auto/ultra 档生效，ultra 档支持时长预算。
+- 新增 `/exa stop` 优雅停止（仅 ultra 档，其余指引改用 cancel）与 `/exa -r --continue <任务号>` 续跑已完成任务；SDK 续跑校验任务归属。
+- 新增后台 LLM Tool `exa-agent-search`：立即返回任务号，完成后自动通知会话，错误信息面向 agent 调用方结构化。
+- 标注 `/context` 为无文档端点；同步 README、插件 API 文档与 code-search skill。
+
 ## v1.1.2 - 2026-09-30
 
 - 新增 SDK v1 公开服务门面，其他插件可通过 AstrBot 注册表调用搜索、抓取、代码上下文与 Exa Agent 任务，与指令共用配置、Key 轮询和预算。
