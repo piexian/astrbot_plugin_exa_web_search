@@ -3,7 +3,8 @@
     "type": "list",
     "description": "Exa API Key 列表",
     "hint": "支持多个 Key 进行轮询，前往 https://dashboard.exa.ai/api-keys 获取",
-    "default": []
+    "default": [],
+    "secret": true
   },
   "exa_base_url": {
     "type": "string",
