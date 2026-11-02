@@ -137,9 +137,13 @@ LLM Tool `exa-search` 支持以下分类：
 免费给的10刀额度不够用怎么办，前往[账单界面](https://dashboard.exa.ai/billing)右下角输入兑换
 <img width="3430" height="1893" alt="image" src="https://github.com/user-attachments/assets/f4cd7d46-c0e8-4506-b19f-0c17de895f0c" />
 
-50赠金
+赠金（一行一个）
 ```
 EXA50BUILDCLUB
+EXA50API
+EXA50FIRESHIP
+EXA20FIRESHIP
+EXA20FREEBUFF
 ```
 
 ## 项目结构
